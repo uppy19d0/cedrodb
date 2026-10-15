@@ -82,7 +82,7 @@ impl Database {
         expected: Option<Value>,
         replacement: Option<Value>,
     ) -> Result<bool> {
-        validate_location(collection, key)?;
+        validate_user_location(collection, key)?;
         if let Some(value) = &replacement {
             validate_document(value, self.options)?;
         }

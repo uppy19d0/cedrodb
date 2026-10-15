@@ -24,6 +24,8 @@ The application owns validation, user permissions and memory sizing. Do not load
 
 Use a conditional batch to require an unchanged stock document and an absent order key, then update stock, create the order and record an outbox event in one frame. Contenders using the same expected stock cannot both reserve the last item. A stable order key rejects replayed requests. See [the full contract and example](conditional-batches.md). The application still owns stock rules and conflict handling.
 
-## Next recipe
+## Background reports and deferred processing
 
-Durable local jobs are planned for 0.5. See [the release roadmap](roadmap.md).
+Enqueue a stable request ID, claim it with a lease and acknowledge the current token together with the generated document and an outbox event. Restarted workers can reclaim expired attempts; retry limits move persistent failures to dead state for inspection and explicit redrive. Use a consistent clock and periodically recover expired final attempts. [Complete queue lifecycle and limits](jobs.md).
+
+Queue scans are O(n), jobs remain in RAM and there is no background service or automatic retention. External calls still need idempotency. See [the roadmap](roadmap.md) for work remaining before 1.0.

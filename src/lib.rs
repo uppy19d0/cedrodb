@@ -20,10 +20,12 @@ mod advanced;
 mod conditional;
 mod maintenance;
 mod query;
+mod queue;
 pub use advanced::{ChangeOperation, ChangePage, ChangeTransaction, Stats};
 pub use conditional::{Condition, ConditionalResult};
 pub use maintenance::IntegrityReport;
 pub use query::{Filter, FilterOp, Query, QueryPage, Record};
+pub use queue::{EnqueueOptions, EnqueueResult, Job, JobStatus, QueueStats, RecoveryResult};
 
 const HEADER: &[u8; 16] = b"CEDRODB\0\x01\0\0\0\0\0\0\0";
 const FRAME_HEADER_BYTES: usize = 12;
@@ -361,7 +363,7 @@ pub struct WriteTransaction<'database> {
 
 impl WriteTransaction<'_> {
     pub fn put(&mut self, collection: &str, key: &str, value: Value) -> Result<()> {
-        validate_location(collection, key)?;
+        validate_user_location(collection, key)?;
         validate_document(&value, self.database.options)?;
         self.stage(Operation::Put {
             collection: collection.into(),
@@ -371,7 +373,7 @@ impl WriteTransaction<'_> {
     }
 
     pub fn delete(&mut self, collection: &str, key: &str) -> Result<()> {
-        validate_location(collection, key)?;
+        validate_user_location(collection, key)?;
         self.stage(Operation::Delete {
             collection: collection.into(),
             key: key.into(),
@@ -469,6 +471,18 @@ fn validate_location(collection: &str, key: &str) -> Result<()> {
         return Err(Error::InvalidInput(format!(
             "key must contain 1..={MAX_KEY_BYTES} UTF-8 bytes"
         )));
+    }
+    Ok(())
+}
+
+/// Public mutation APIs reserve queue storage while log replay and queue methods
+/// retain access through validate_location and the shared internal commit path.
+fn validate_user_location(collection: &str, key: &str) -> Result<()> {
+    validate_location(collection, key)?;
+    if collection.starts_with(queue::QUEUE_PREFIX) {
+        return Err(Error::InvalidInput(
+            "collections beginning with _cedro.jobs. are reserved for queue APIs".into(),
+        ));
     }
     Ok(())
 }

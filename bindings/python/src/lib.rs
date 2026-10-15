@@ -1,7 +1,7 @@
 //! Native calls only: Python handles its public JSON ergonomics, while every
 //! database operation, transaction and recovery runs in the shared Rust core.
 
-use cedrodb::{ChangeOperation, Condition, Database, Options, Query};
+use cedrodb::{ChangeOperation, Condition, Database, EnqueueOptions, Options, Query};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use serde::Deserialize;
@@ -42,6 +42,66 @@ enum BatchOperation {
 struct ConditionalRequest {
     conditions: Vec<Condition>,
     operations: Vec<ChangeOperation>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum QueueRequest {
+    Enqueue {
+        name: String,
+        id: String,
+        payload: Value,
+        now_ms: u64,
+        delay_ms: u64,
+        max_attempts: u32,
+        priority: u32,
+    },
+    Claim {
+        name: String,
+        worker: String,
+        now_ms: u64,
+        lease_ms: u64,
+    },
+    Ack {
+        name: String,
+        id: String,
+        token: String,
+        now_ms: u64,
+        operations: Vec<ChangeOperation>,
+    },
+    Fail {
+        name: String,
+        id: String,
+        token: String,
+        error: String,
+        now_ms: u64,
+        retry_delay_ms: u64,
+    },
+    Extend {
+        name: String,
+        id: String,
+        token: String,
+        now_ms: u64,
+        lease_ms: u64,
+    },
+    Get {
+        name: String,
+        id: String,
+    },
+    Stats {
+        name: String,
+        now_ms: u64,
+    },
+    RecoverExpired {
+        name: String,
+        now_ms: u64,
+        limit: usize,
+    },
+    RetryDead {
+        name: String,
+        id: String,
+        now_ms: u64,
+    },
 }
 
 #[pyclass(frozen, module = "cedrodb._native")]
@@ -169,6 +229,101 @@ impl NativeDatabase {
                         .conditional_batch(&request.conditions, &request.operations)
                         .map_err(engine_error)?,
                 )
+            })
+        })
+    }
+
+    fn queue_json(&self, py: Python<'_>, request: &str) -> PyResult<String> {
+        py.detach(|| {
+            let request: QueueRequest = parse(request)?;
+            self.with_database(|database| match request {
+                QueueRequest::Enqueue {
+                    name,
+                    id,
+                    payload,
+                    now_ms,
+                    delay_ms,
+                    max_attempts,
+                    priority,
+                } => encode(
+                    &database
+                        .queue_enqueue(
+                            &name,
+                            &id,
+                            payload,
+                            EnqueueOptions {
+                                now_ms,
+                                delay_ms,
+                                max_attempts,
+                                priority,
+                            },
+                        )
+                        .map_err(engine_error)?,
+                ),
+                QueueRequest::Claim {
+                    name,
+                    worker,
+                    now_ms,
+                    lease_ms,
+                } => encode(
+                    &database
+                        .queue_claim(&name, &worker, now_ms, lease_ms)
+                        .map_err(engine_error)?,
+                ),
+                QueueRequest::Ack {
+                    name,
+                    id,
+                    token,
+                    now_ms,
+                    operations,
+                } => encode(
+                    &database
+                        .queue_ack(&name, &id, &token, now_ms, &operations)
+                        .map_err(engine_error)?,
+                ),
+                QueueRequest::Fail {
+                    name,
+                    id,
+                    token,
+                    error,
+                    now_ms,
+                    retry_delay_ms,
+                } => encode(
+                    &database
+                        .queue_fail(&name, &id, &token, now_ms, &error, retry_delay_ms)
+                        .map_err(engine_error)?,
+                ),
+                QueueRequest::Extend {
+                    name,
+                    id,
+                    token,
+                    now_ms,
+                    lease_ms,
+                } => encode(
+                    &database
+                        .queue_extend(&name, &id, &token, now_ms, lease_ms)
+                        .map_err(engine_error)?,
+                ),
+                QueueRequest::Get { name, id } => {
+                    encode(&database.queue_get(&name, &id).map_err(engine_error)?)
+                }
+                QueueRequest::Stats { name, now_ms } => {
+                    encode(&database.queue_stats(&name, now_ms).map_err(engine_error)?)
+                }
+                QueueRequest::RecoverExpired {
+                    name,
+                    now_ms,
+                    limit,
+                } => encode(
+                    &database
+                        .queue_recover_expired(&name, now_ms, limit)
+                        .map_err(engine_error)?,
+                ),
+                QueueRequest::RetryDead { name, id, now_ms } => encode(
+                    &database
+                        .queue_retry_dead(&name, &id, now_ms)
+                        .map_err(engine_error)?,
+                ),
             })
         })
     }

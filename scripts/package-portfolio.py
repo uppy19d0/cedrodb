@@ -48,6 +48,9 @@ def main():
     inventory = cases["inventory"]
     if not all(inventory[name] for name in ["reserved", "duplicate_rejected", "stale_rejected"]) or inventory["remaining"] != 0 or inventory["orders"] != 1 or inventory["outbox_events"] != 1:
         raise ValueError("Guarded stock reservation produced unexpected results")
+    jobs = cases["jobs"]
+    if not all(jobs[name] for name in ["deduplicated", "expired_reclaimed", "stale_ack_rejected", "completed", "dead_lettered", "history_resumed"]) or jobs["attempts"] != 2 or jobs["outputs"] != 1 or jobs["stats"]["done"] != 1 or jobs["stats"]["dead"] != 1:
+        raise ValueError("Durable queue recovery produced unexpected results")
 
     fixed = ["Cargo.toml", "Cargo.lock", "README.md", "CHANGELOG.md", "LICENSE", ".gitignore"]
     sources = [root / name for name in fixed]

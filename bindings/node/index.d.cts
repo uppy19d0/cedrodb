@@ -4,6 +4,8 @@ declare namespace cedrodb {
   type Database = API.Database;
   const Collection: typeof API.Collection;
   type Collection<T extends API.JsonValue = API.JsonValue> = API.Collection<T>;
+  const Queue: typeof API.Queue;
+  type Queue<T extends API.JsonValue = API.JsonValue> = API.Queue<T>;
   const version: typeof API.version;
   type JsonValue = API.JsonValue;
   type DatabaseOptions = API.DatabaseOptions;
@@ -21,5 +23,15 @@ declare namespace cedrodb {
   type Stats = API.Stats;
   type Aggregate = API.Aggregate;
   type IntegrityReport = API.IntegrityReport;
+  type JobStatus = API.JobStatus;
+  type Job<T extends API.JsonValue = API.JsonValue> = API.Job<T>;
+  type LeasedJob<T extends API.JsonValue = API.JsonValue> = API.LeasedJob<T>;
+  type EnqueueOptions = API.EnqueueOptions;
+  type EnqueueResult<T extends API.JsonValue = API.JsonValue> = API.EnqueueResult<T>;
+  type LeaseOptions = API.LeaseOptions;
+  type AckOptions = API.AckOptions;
+  type FailOptions = API.FailOptions;
+  type QueueStats = API.QueueStats;
+  type RecoveryResult = API.RecoveryResult;
 }
 export = cedrodb;

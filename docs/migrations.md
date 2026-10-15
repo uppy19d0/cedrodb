@@ -12,6 +12,12 @@ Recreate indexes after reopening or restoration. Complete backups retain transac
 
 The log remains compatible. Conditional batches are additive; conditions are evaluated before writes and are not stored as new log operations. Existing backups/restore and cursors keep their format. Guard all read dependencies explicitly and handle a mismatch before retrying.
 
+## 0.4 to 0.5
+
+The log and backup formats remain unchanged; queue methods are additive. The prefix `_cedro.jobs.` is now reserved for generic mutation APIs. If an existing application used it for ordinary collections, migrate those documents to another collection with 0.4 before enabling queue use. Existing documents remain readable; opening a log does not silently rewrite them.
+
+Queue payloads use the shared JavaScript-safe numeric range in all runtimes; ordinary document numeric ranges are unchanged. Queue internal schema version is 1. Restoring/forking a history requires stopping old workers and reconciling external effects; tokens are not globally unique across forks.
+
 ## Pre-1.0 policy
 
 Incompatible format/API changes must have release and migration notes. A stable backward/forward compatibility contract is a gate for 1.0, not a guarantee already established by the project.

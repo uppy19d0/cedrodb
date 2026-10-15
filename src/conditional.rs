@@ -61,10 +61,12 @@ impl Database {
                     key,
                     value,
                 } => {
-                    validate_location(collection, key)?;
+                    validate_user_location(collection, key)?;
                     validate_document(value, self.options)?;
                 }
-                ChangeOperation::Delete { collection, key } => validate_location(collection, key)?,
+                ChangeOperation::Delete { collection, key } => {
+                    validate_user_location(collection, key)?
+                }
             }
             let comma_bytes = usize::from(!prepared_operations.is_empty());
             let remaining = self

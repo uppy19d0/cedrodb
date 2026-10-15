@@ -11,18 +11,22 @@ from collections.abc import Mapping
 import json
 import math
 import os
+import re
+import time
 from typing import (
     Any, Dict, Iterable, Iterator, List, Literal, Optional, Tuple, TypedDict, Union,
 )
 
 from ._native import CedroError, DatabaseClosedError, NativeDatabase
 
-__version__ = "0.4.0"
+__version__ = "0.5.0"
 __all__ = [
     "Database", "Collection", "Transaction", "CedroError", "DatabaseClosedError",
     "MISSING", "DELETE", "JSONValue", "Filter", "Record", "QueryPage",
     "ChangePage", "Stats", "IntegrityReport", "Condition", "AbsentCondition",
     "EqualsCondition", "ConditionalResult", "__version__",
+    "Queue", "Job", "JobStatus", "EnqueueResult", "QueueStats", "RecoveryResult",
+    "MAX_SAFE_INTEGER",
 ]
 
 JSONValue = Union[None, bool, int, float, str, List["JSONValue"], Dict[str, "JSONValue"]]
@@ -103,6 +107,46 @@ class ConditionalResult(TypedDict):
     cursor: int
 
 
+MAX_SAFE_INTEGER = 9_007_199_254_740_991
+JobStatus = Literal["queued", "leased", "done", "dead"]
+
+
+class Job(TypedDict):
+    schema_version: int
+    id: str
+    payload: JSONValue
+    status: JobStatus
+    attempts: int
+    max_attempts: int
+    priority: int
+    created_at: int
+    available_at: int
+    lease_until: Optional[int]
+    lease_token: Optional[str]
+    worker: Optional[str]
+    last_error: Optional[str]
+
+
+class EnqueueResult(TypedDict):
+    inserted: bool
+    job: Job
+
+
+class QueueStats(TypedDict):
+    queued: int
+    leased: int
+    done: int
+    dead: int
+    ready: int
+    expired: int
+
+
+class RecoveryResult(TypedDict):
+    requeued: int
+    dead: int
+    has_more: bool
+
+
 class Aggregate(TypedDict):
     count: int
     sum: float
@@ -178,6 +222,55 @@ def _positive_integer(value: Any, label: str) -> int:
     return value
 
 
+def _queue_integer(
+    value: Any, label: str, minimum: int = 0, maximum: int = MAX_SAFE_INTEGER
+) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError("{} must be an integer".format(label))
+    if not minimum <= value <= maximum:
+        raise ValueError("{} must be in [{}, {}]".format(label, minimum, maximum))
+    return value
+
+
+def _queue_now(now_ms: Optional[int]) -> int:
+    return _queue_integer(time.time_ns() // 1_000_000 if now_ms is None else now_ms, "now_ms")
+
+
+def _queue_name(value: Any) -> str:
+    name = _string(value, "queue name")
+    if re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", name) is None:
+        raise ValueError("queue name must contain 1..128 ASCII letters, digits, _, . or -")
+    return name
+
+
+def _queue_text(value: Any, label: str, maximum_bytes: Optional[int] = None) -> str:
+    text = _string(value, label)
+    if not text or "\x00" in text:
+        raise ValueError("{} must be nonempty and must not contain NUL".format(label))
+    if maximum_bytes is not None and len(text.encode("utf-8")) > maximum_bytes:
+        raise ValueError("{} exceeds {} UTF-8 bytes".format(label, maximum_bytes))
+    return text
+
+
+def _validate_queue_payload(value: Any) -> None:
+    _validate_json(value)
+
+    def portable(item: Any) -> None:
+        if isinstance(item, bool):
+            return
+        if isinstance(item, (int, float)):
+            if abs(item) > MAX_SAFE_INTEGER:
+                raise OverflowError("queue payload numbers must be within +/-MAX_SAFE_INTEGER")
+        elif isinstance(item, dict):
+            for nested in item.values():
+                portable(nested)
+        elif isinstance(item, (list, tuple)):
+            for nested in item:
+                portable(nested)
+
+    portable(value)
+
+
 class Database:
     """Exclusively open a database directory, creating it if necessary.
 
@@ -225,6 +318,11 @@ class Database:
     def collection(self, name: str) -> Collection:
         self._check_open()
         return Collection(self, _string(name, "collection name"))
+
+    def queue(self, name: str) -> Queue:
+        """Access a durable local job queue. Use an application-managed worker loop."""
+        self._check_open()
+        return Queue(self, _queue_name(name))
 
     def batch(self, operations: Iterable[Mapping]) -> None:
         """Commit put/delete operations together, or leave all records unchanged.
@@ -315,6 +413,117 @@ class Database:
             _positive_integer(max_state_bytes, "max_state_bytes"),
         )
         return json.loads(NativeDatabase.restore_backup_json(backup, destination, *options))
+
+
+class Queue:
+    """Durable local jobs with delayed availability, leases and bounded retries.
+
+    Queue payload numbers use +/-MAX_SAFE_INTEGER for lossless Node/Python
+    interoperability. Ordinary collection documents retain their full integer
+    range. Queue storage is reserved: do not mutate _cedro.jobs.* collections.
+    Calls are synchronous and scans are O(n), without a background worker.
+    """
+
+    def __init__(self, database: Database, name: str) -> None:
+        self._database = database
+        self.name = _queue_name(name)
+
+    def _request(self, action: str, **arguments: Any) -> Any:
+        self._database._check_open()
+        request = {"action": action, "name": self.name, **arguments}
+        return json.loads(self._database._native.queue_json(_dumps(request)))
+
+    def enqueue(
+        self,
+        id: str,
+        payload: JSONValue,
+        *,
+        now_ms: Optional[int] = None,
+        delay_ms: int = 0,
+        max_attempts: int = 3,
+        priority: int = 0,
+    ) -> EnqueueResult:
+        """Insert once by id; an existing queued/leased/done/dead job is returned."""
+        self._database._check_open()
+        _validate_queue_payload(payload)
+        return self._request(
+            "enqueue", id=_queue_text(id, "job id", 4096), payload=payload,
+            now_ms=_queue_now(now_ms), delay_ms=_queue_integer(delay_ms, "delay_ms"),
+            max_attempts=_queue_integer(max_attempts, "max_attempts", 1, 1000),
+            priority=_queue_integer(priority, "priority", 0, 1000),
+        )
+
+    def claim(
+        self, worker: str, *, now_ms: Optional[int] = None, lease_ms: int = 30_000
+    ) -> Optional[Job]:
+        """Lease ready work in priority order, or reclaim eligible expired work."""
+        return self._request(
+            "claim", worker=_queue_text(worker, "worker", 128), now_ms=_queue_now(now_ms),
+            lease_ms=_queue_integer(lease_ms, "lease_ms", 1),
+        )
+
+    def ack(
+        self,
+        id: str,
+        token: str,
+        *,
+        now_ms: Optional[int] = None,
+        operations: Iterable[Mapping] = (),
+    ) -> bool:
+        """Complete an active lease plus optional business writes in one transaction.
+
+        The token must match and the lease must still be active. Operations use
+        put/delete dictionaries and cannot write to any _cedro.jobs.* collection.
+        """
+        return self._request(
+            "ack", id=_queue_text(id, "job id", 4096), token=_queue_text(token, "lease token"),
+            now_ms=_queue_now(now_ms), operations=list(operations),
+        )
+
+    def fail(
+        self,
+        id: str,
+        token: str,
+        error: str,
+        *,
+        now_ms: Optional[int] = None,
+        retry_delay_ms: int = 0,
+    ) -> bool:
+        """Requeue an active lease after a delay, or mark exhausted attempts dead."""
+        message = _queue_text(error, "error", 4096)
+        return self._request(
+            "fail", id=_queue_text(id, "job id", 4096), token=_queue_text(token, "lease token"),
+            error=message, now_ms=_queue_now(now_ms),
+            retry_delay_ms=_queue_integer(retry_delay_ms, "retry_delay_ms"),
+        )
+
+    def extend(
+        self, id: str, token: str, *, now_ms: Optional[int] = None, lease_ms: int = 30_000
+    ) -> bool:
+        """Renew an active matching lease; stale or expired tokens return False."""
+        return self._request(
+            "extend", id=_queue_text(id, "job id", 4096), token=_queue_text(token, "lease token"),
+            now_ms=_queue_now(now_ms), lease_ms=_queue_integer(lease_ms, "lease_ms", 1),
+        )
+
+    def get(self, id: str) -> Optional[Job]:
+        return self._request("get", id=_queue_text(id, "job id", 4096))
+
+    def stats(self, *, now_ms: Optional[int] = None) -> QueueStats:
+        return self._request("stats", now_ms=_queue_now(now_ms))
+
+    def recover_expired(
+        self, *, now_ms: Optional[int] = None, limit: int = 10
+    ) -> RecoveryResult:
+        """Requeue expired leases or mark exhausted jobs dead in bounded batches."""
+        return self._request(
+            "recover_expired", now_ms=_queue_now(now_ms),
+            limit=_queue_integer(limit, "limit", 1, 1000),
+        )
+
+    def retry_dead(self, id: str, *, now_ms: Optional[int] = None) -> bool:
+        """Reset a dead job's attempts and make it ready again, preserving its id."""
+        return self._request("retry_dead", id=_queue_text(id, "job id", 4096), now_ms=_queue_now(now_ms))
 
 
 class Collection:

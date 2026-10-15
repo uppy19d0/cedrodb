@@ -4,13 +4,13 @@ build-backend = "maturin"
 
 [project]
 name = "cedrodb"
-version = "0.4.0"
-description = "Embedded Rust document database with atomic batches, indexes and a durable changefeed"
+version = "0.5.0"
+description = "Experimental embedded Rust database with guarded transactions, verified backups and persistent local job queues"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Luis Tavarez" }]
-keywords = ["database", "embedded", "document", "outbox", "changefeed", "rust"]
+keywords = ["database", "embedded", "document", "outbox", "changefeed", "rust", "job-queue", "offline", "backup"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3",

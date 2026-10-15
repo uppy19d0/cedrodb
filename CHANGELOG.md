@@ -2,6 +2,15 @@
 
 All releases remain experimental. Future work is separate in [the roadmap](docs/roadmap.md).
 
+## 0.5.0 — 2026-10-15
+
+- Added persistent local queues with stable job IDs, delayed availability, priorities and deterministic claim ordering.
+- Added durable leases, stale-token rejection, lease extension, bounded attempts, retry delays, expired-job recovery and dead-job redrive.
+- Added acknowledgements that atomically finish a job and write business documents/outbox events.
+- Added shared safe-number validation for job payloads, strict internal job validation and reserved queue mutation namespaces.
+- Added typed SDK APIs, executable worker examples and restart/fencing/atomicity/capacity tests.
+- Kept log/backup formats unchanged; queues scan in O(n), retain completed/dead jobs and need application-managed workers/capacity.
+
 ## 0.4.0 — 2026-10-15
 
 - Added atomic conditional batches across documents/collections, with absent/equals guards and conflict details.

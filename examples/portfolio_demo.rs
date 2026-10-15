@@ -1,4 +1,6 @@
-use cedrodb::{ChangeOperation, Condition, Database, Filter, FilterOp, Query};
+use cedrodb::{
+    ChangeOperation, Condition, Database, EnqueueOptions, Filter, FilterOp, JobStatus, Query,
+};
 use serde_json::json;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -141,6 +143,80 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &operations,
     )?;
     let remaining = stock.get("inventory", "sku:1")?.unwrap()["available"].clone();
+    let jobs_path = directory.0.join("jobs-demo");
+    let jobs = Database::open(&jobs_path)?;
+    jobs.queue_enqueue(
+        "reports",
+        "job:report",
+        json!({"type":"report.generate","site":"SDQ"}),
+        EnqueueOptions {
+            now_ms: 1000,
+            priority: 5,
+            ..EnqueueOptions::default()
+        },
+    )?;
+    let duplicate_job = jobs.queue_enqueue(
+        "reports",
+        "job:report",
+        json!({"type":"ignored duplicate"}),
+        EnqueueOptions {
+            now_ms: 1000,
+            ..EnqueueOptions::default()
+        },
+    )?;
+    let first_lease = jobs.queue_claim("reports", "worker-A", 1000, 100)?.unwrap();
+    drop(jobs); // Simulate an application restart with an unfinished lease.
+    let jobs = Database::open(&jobs_path)?;
+    let history_resumed = jobs.queue_get("reports", "job:report")?.unwrap().status
+        == JobStatus::Leased
+        && jobs.changes(1, 10)?.transactions.len() == 1;
+    let new_lease = jobs.queue_claim("reports", "worker-B", 1100, 100)?.unwrap();
+    let stale_ack = jobs.queue_ack(
+        "reports",
+        "job:report",
+        first_lease.lease_token.as_ref().unwrap(),
+        1101,
+        &[],
+    )?;
+    let completed = jobs.queue_ack(
+        "reports",
+        "job:report",
+        new_lease.lease_token.as_ref().unwrap(),
+        1101,
+        &[
+            ChangeOperation::Put {
+                collection: "reports".into(),
+                key: "report:1".into(),
+                value: json!({"state":"generated"}),
+            },
+            ChangeOperation::Put {
+                collection: "outbox".into(),
+                key: "event:report:1".into(),
+                value: json!({"type":"report.generated"}),
+            },
+        ],
+    )?;
+    jobs.queue_enqueue(
+        "reports",
+        "job:failure",
+        json!({"type":"unavailable endpoint"}),
+        EnqueueOptions {
+            now_ms: 1200,
+            max_attempts: 1,
+            ..EnqueueOptions::default()
+        },
+    )?;
+    let doomed = jobs.queue_claim("reports", "worker-C", 1200, 100)?.unwrap();
+    jobs.queue_fail(
+        "reports",
+        &doomed.id,
+        doomed.lease_token.as_ref().unwrap(),
+        1201,
+        "external endpoint unavailable",
+        0,
+    )?;
+    let dead_lettered =
+        jobs.queue_get("reports", "job:failure")?.unwrap().status == JobStatus::Dead;
     let output = json!({
         "engine": {"name": "CedroDB", "version": env!("CARGO_PKG_VERSION")},
         "generatedBy": "cargo run --example portfolio_demo",
@@ -160,7 +236,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "inventory": {"reserved":reserved.applied,"duplicate_rejected":!duplicate.applied,
                 "stale_rejected":!stale.applied,"failed_condition":stale.failed_condition,
                 "remaining":remaining,"orders":stock.scan("orders")?.len(),
-                "outbox_events":stock.scan("outbox")?.len(),"cursor":stock.stats()?.latest_cursor}
+                "outbox_events":stock.scan("outbox")?.len(),"cursor":stock.stats()?.latest_cursor},
+            "jobs": {"deduplicated":!duplicate_job.inserted,"expired_reclaimed":new_lease.attempts == 2,
+                "stale_ack_rejected":!stale_ack,"completed":completed,"dead_lettered":dead_lettered,
+                "attempts":new_lease.attempts,"outputs":jobs.scan("reports")?.len(),
+                "history_resumed":history_resumed,"stats":jobs.queue_stats("reports",1201)?}
         },
         "capabilities": [
             "Rust engine with its own append-only transaction log",
@@ -173,7 +253,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "JSON Pointer filters, ordered cursor pagination and handle-local equality indexes",
             "Exclusive database file lock",
             "Verified full-history backups and validated no-overwrite restoration",
-            "Atomic conditional batches spanning inventory, orders and outbox"
+            "Atomic conditional batches spanning inventory, orders and outbox",
+            "Durable local jobs with priorities, leases, retries and fenced atomic acknowledgments"
         ],
         "limitations": [
             format!("Experimental v{}: not production validated", env!("CARGO_PKG_VERSION")),

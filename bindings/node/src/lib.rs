@@ -1,6 +1,6 @@
 //! Thin N-API bridge. Persistence, queries, indexes and concurrency decisions
 //! belong to the shared CedroDB Rust engine, never to a JavaScript copy.
-use cedrodb::{ChangeOperation, Condition, Database, Options, Query};
+use cedrodb::{ChangeOperation, Condition, Database, EnqueueOptions, Options, Query};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
 use serde::Deserialize;
@@ -100,6 +100,68 @@ enum BatchOperation {
 struct ConditionalRequest {
     conditions: Vec<Condition>,
     operations: Vec<ChangeOperation>,
+}
+
+// Shared JSON protocol with the Python binding. Defaults are resolved by the
+// language wrapper; every field here is required and unknown fields are errors.
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum QueueRequest {
+    Enqueue {
+        name: String,
+        id: String,
+        payload: Value,
+        now_ms: u64,
+        delay_ms: u64,
+        max_attempts: u32,
+        priority: u32,
+    },
+    Claim {
+        name: String,
+        worker: String,
+        now_ms: u64,
+        lease_ms: u64,
+    },
+    Ack {
+        name: String,
+        id: String,
+        token: String,
+        now_ms: u64,
+        operations: Vec<ChangeOperation>,
+    },
+    Fail {
+        name: String,
+        id: String,
+        token: String,
+        now_ms: u64,
+        error: String,
+        retry_delay_ms: u64,
+    },
+    Extend {
+        name: String,
+        id: String,
+        token: String,
+        now_ms: u64,
+        lease_ms: u64,
+    },
+    Get {
+        name: String,
+        id: String,
+    },
+    Stats {
+        name: String,
+        now_ms: u64,
+    },
+    RecoverExpired {
+        name: String,
+        now_ms: u64,
+        limit: usize,
+    },
+    RetryDead {
+        name: String,
+        id: String,
+        now_ms: u64,
+    },
 }
 
 #[napi]
@@ -204,6 +266,106 @@ impl NativeDatabase {
                 .conditional_batch(&request.conditions, &request.operations)
                 .map_err(engine_error)?,
         )
+    }
+
+    #[napi]
+    pub fn queue_json(&self, request_json: String) -> Result<String> {
+        let value: Value = decode(&request_json)?;
+        // Validate all numeric input before invoking any mutating engine API,
+        // including callers of the raw bridge rather than the public wrapper.
+        validate_portable_json(&value)?;
+        let request: QueueRequest =
+            serde_json::from_value(value).map_err(|error| invalid(error.to_string()))?;
+        let database = self.database()?;
+        match request {
+            QueueRequest::Enqueue {
+                name,
+                id,
+                payload,
+                now_ms,
+                delay_ms,
+                max_attempts,
+                priority,
+            } => encode(
+                &database
+                    .queue_enqueue(
+                        &name,
+                        &id,
+                        payload,
+                        EnqueueOptions {
+                            now_ms,
+                            delay_ms,
+                            max_attempts,
+                            priority,
+                        },
+                    )
+                    .map_err(engine_error)?,
+            ),
+            QueueRequest::Claim {
+                name,
+                worker,
+                now_ms,
+                lease_ms,
+            } => encode(
+                &database
+                    .queue_claim(&name, &worker, now_ms, lease_ms)
+                    .map_err(engine_error)?,
+            ),
+            QueueRequest::Ack {
+                name,
+                id,
+                token,
+                now_ms,
+                operations,
+            } => encode(
+                &database
+                    .queue_ack(&name, &id, &token, now_ms, &operations)
+                    .map_err(engine_error)?,
+            ),
+            QueueRequest::Fail {
+                name,
+                id,
+                token,
+                now_ms,
+                error,
+                retry_delay_ms,
+            } => encode(
+                &database
+                    .queue_fail(&name, &id, &token, now_ms, &error, retry_delay_ms)
+                    .map_err(engine_error)?,
+            ),
+            QueueRequest::Extend {
+                name,
+                id,
+                token,
+                now_ms,
+                lease_ms,
+            } => encode(
+                &database
+                    .queue_extend(&name, &id, &token, now_ms, lease_ms)
+                    .map_err(engine_error)?,
+            ),
+            QueueRequest::Get { name, id } => {
+                encode(&database.queue_get(&name, &id).map_err(engine_error)?)
+            }
+            QueueRequest::Stats { name, now_ms } => {
+                encode(&database.queue_stats(&name, now_ms).map_err(engine_error)?)
+            }
+            QueueRequest::RecoverExpired {
+                name,
+                now_ms,
+                limit,
+            } => encode(
+                &database
+                    .queue_recover_expired(&name, now_ms, limit)
+                    .map_err(engine_error)?,
+            ),
+            QueueRequest::RetryDead { name, id, now_ms } => encode(
+                &database
+                    .queue_retry_dead(&name, &id, now_ms)
+                    .map_err(engine_error)?,
+            ),
+        }
     }
 
     #[napi]

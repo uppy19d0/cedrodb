@@ -1,6 +1,6 @@
 [package]
 name = "cedrodb"
-version = "0.4.0"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.74"
 description = "An experimental embedded document database with a durable transaction log"

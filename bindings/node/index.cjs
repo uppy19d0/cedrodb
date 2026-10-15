@@ -158,6 +158,33 @@ function integrityReport(raw) {
   };
 }
 
+function queueName(name) {
+  if (typeof name !== 'string' || !/^[A-Za-z0-9_.-]{1,128}$/.test(name)) {
+    throw new TypeError('Queue name must contain 1..128 ASCII letters, digits, underscores, dots or hyphens');
+  }
+  return name;
+}
+
+function boundedString(value, label, maximumBytes) {
+  string(value, label);
+  if (Buffer.byteLength(value, 'utf8') > maximumBytes) throw new RangeError(`${label} exceeds ${maximumBytes} UTF-8 bytes`);
+  return value;
+}
+
+function queueInteger(options, name, fallback, minimum = 0, maximum = Number.MAX_SAFE_INTEGER) {
+  return integer(own(options, name) ? options[name] : fallback, name, minimum, maximum);
+}
+
+function jobRecord(job) {
+  if (job == null) return undefined;
+  return {
+    schemaVersion: job.schema_version, id: job.id, payload: job.payload, status: job.status,
+    attempts: job.attempts, maxAttempts: job.max_attempts, priority: job.priority,
+    createdAt: job.created_at, availableAt: job.available_at,
+    leaseUntil: job.lease_until, leaseToken: job.lease_token, worker: job.worker, lastError: job.last_error,
+  };
+}
+
 class Database {
   #native;
 
@@ -173,6 +200,8 @@ class Database {
   }
 
   collection(name) { return new Collection(this, string(name, 'collection name')); }
+
+  queue(name) { return new Queue(this, queueName(name)); }
 
   close() { this.#native.close(); }
 
@@ -216,6 +245,8 @@ class Database {
   verify() { return integrityReport(this.#native.verify()); }
 
   backup(path) { return integrityReport(this.#native.backup(string(path, 'backup path'))); }
+
+  _queue(request) { return JSON.parse(this.#native.queueJson(JSON.stringify(request))); }
 
   _get(collection, key) {
     const raw = this.#native.get(collection, string(key, 'key'));
@@ -269,4 +300,104 @@ class Collection {
   aggregate(field) { return this.#database._aggregate(this.#name, field); }
 }
 
-module.exports = { Database, Collection, version: '0.4.0' };
+class Queue {
+  #database;
+  #name;
+
+  constructor(database, name) {
+    if (!(database instanceof Database)) throw new TypeError('Queue requires a Database');
+    this.#database = database;
+    this.#name = queueName(name);
+  }
+
+  get name() { return this.#name; }
+
+  enqueue(id, payload, options = {}) {
+    boundedString(id, 'job id', 4096);
+    validateJSON(payload);
+    object(options, 'enqueue options', ['nowMs', 'delayMs', 'maxAttempts', 'priority']);
+    const now = queueInteger(options, 'nowMs', Date.now());
+    const delay = queueInteger(options, 'delayMs', 0);
+    integer(now + delay, 'available time');
+    const result = this.#database._queue({
+      action: 'enqueue', name: this.#name, id, payload, now_ms: now, delay_ms: delay,
+      max_attempts: queueInteger(options, 'maxAttempts', 3, 1, 1000),
+      priority: queueInteger(options, 'priority', 0, 0, 1000),
+    });
+    return { inserted: result.inserted, job: jobRecord(result.job) };
+  }
+
+  claim(worker, options = {}) {
+    boundedString(worker, 'worker', 128);
+    object(options, 'claim options', ['nowMs', 'leaseMs']);
+    const now = queueInteger(options, 'nowMs', Date.now());
+    const lease = queueInteger(options, 'leaseMs', 30000, 1);
+    integer(now + lease, 'lease expiry');
+    return jobRecord(this.#database._queue({ action: 'claim', name: this.#name, worker, now_ms: now, lease_ms: lease }));
+  }
+
+  ack(id, token, options = {}) {
+    boundedString(id, 'job id', 4096);
+    string(token, 'lease token');
+    object(options, 'ack options', ['nowMs', 'operations']);
+    const operations = own(options, 'operations') ? options.operations : [];
+    if (!Array.isArray(operations)) throw new TypeError('ack operations must be an array');
+    const normalized = Array.from(operations, normalizeOperation);
+    for (const operation of normalized) {
+      if (operation.collection.startsWith('_cedro.jobs.')) throw new TypeError('ack operations cannot modify the reserved queue namespace');
+    }
+    return this.#database._queue({
+      action: 'ack', name: this.#name, id, token,
+      now_ms: queueInteger(options, 'nowMs', Date.now()), operations: normalized,
+    });
+  }
+
+  fail(id, token, error, options = {}) {
+    boundedString(id, 'job id', 4096);
+    string(token, 'lease token');
+    boundedString(error, 'job error', 4096);
+    object(options, 'fail options', ['nowMs', 'retryDelayMs']);
+    const now = queueInteger(options, 'nowMs', Date.now());
+    const delay = queueInteger(options, 'retryDelayMs', 0);
+    integer(now + delay, 'retry time');
+    return this.#database._queue({ action: 'fail', name: this.#name, id, token, error, now_ms: now, retry_delay_ms: delay });
+  }
+
+  extend(id, token, options = {}) {
+    boundedString(id, 'job id', 4096);
+    string(token, 'lease token');
+    object(options, 'extend options', ['nowMs', 'leaseMs']);
+    const now = queueInteger(options, 'nowMs', Date.now());
+    const lease = queueInteger(options, 'leaseMs', 30000, 1);
+    integer(now + lease, 'lease expiry');
+    return this.#database._queue({ action: 'extend', name: this.#name, id, token, now_ms: now, lease_ms: lease });
+  }
+
+  get(id) {
+    return jobRecord(this.#database._queue({ action: 'get', name: this.#name, id: boundedString(id, 'job id', 4096) }));
+  }
+
+  stats(options = {}) {
+    object(options, 'queue stats options', ['nowMs']);
+    return this.#database._queue({ action: 'stats', name: this.#name, now_ms: queueInteger(options, 'nowMs', Date.now()) });
+  }
+
+  recoverExpired(options = {}) {
+    object(options, 'recovery options', ['nowMs', 'limit']);
+    const result = this.#database._queue({
+      action: 'recover_expired', name: this.#name,
+      now_ms: queueInteger(options, 'nowMs', Date.now()), limit: queueInteger(options, 'limit', 10, 1, 1000),
+    });
+    return { requeued: result.requeued, dead: result.dead, hasMore: result.has_more };
+  }
+
+  retryDead(id, options = {}) {
+    object(options, 'retry options', ['nowMs']);
+    return this.#database._queue({
+      action: 'retry_dead', name: this.#name, id: boundedString(id, 'job id', 4096),
+      now_ms: queueInteger(options, 'nowMs', Date.now()),
+    });
+  }
+}
+
+module.exports = { Database, Collection, Queue, version: '0.5.0' };

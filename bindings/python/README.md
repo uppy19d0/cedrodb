@@ -1,15 +1,16 @@
 # CedroDB for Python
 
-**Keep application documents, events and recovery history in one local database.**
+**Keep local jobs, application documents and recovery history in one database.**
 CedroDB is an embedded document engine written in Rust, with a native Python API.
 A form submission and its outbox event can commit together, indexed queries find
 pending work, and a durable changefeed lets your application resume processing
-after restarting. Conditional batches reserve resources and append events only
+after restarting. Durable queues schedule local work with leases, retries and
+dead-job recovery. Conditional batches reserve resources and append events only
 when all expected documents still match. Integrity verification and portable
 backups preserve the recovery history.
 
-Use it for offline forms and inspections, desktop application state, local
-automation, or small services that need JSON documents without running a database
+Use it for offline upload queues, report generation, file-processing tools,
+desktop application state, or small services that need JSON documents without running a database
 server. The Python package calls the Rust engine directly; it does not spawn a
 process or maintain a second Python storage implementation.
 
@@ -20,19 +21,18 @@ claims or production-readiness guarantees.
 
 ## Installation
 
-For the 0.4.0 release on PyPI:
+For the 0.5.0 release on PyPI:
 
 ```sh
-python -m pip install cedrodb==0.4.0
+python -m pip install cedrodb==0.5.0
 ```
 
-PyPI publication requires the project's publisher configuration. If that version
-is not available there yet, obtain its wheel or self-contained source archive
-from [GitHub Releases](https://github.com/uppy19d0/cedrodb/releases), then install
-the downloaded file:
+If a version is not listed on PyPI, obtain its wheel or self-contained source
+archive from [GitHub Releases](https://github.com/uppy19d0/cedrodb/releases), then
+install the downloaded file:
 
 ```sh
-python -m pip install ./cedrodb-0.4.0.tar.gz
+python -m pip install ./cedrodb-0.5.0.tar.gz
 ```
 
 A compatible wheel needs no Rust toolchain at runtime. Source installation
@@ -138,6 +138,120 @@ with Database("./app.cedro") as db:
         {"kind": "delete", "collection": "drafts", "key": "order:3"},
     ])
 ```
+
+## Run durable local jobs
+
+Create an application-managed worker loop without adding a separate queue
+server. Job state survives reopening and is included in database backups.
+
+```python
+from cedrodb import Database
+
+with Database("./worker.cedro") as db:
+    queue = db.queue("reports")
+    enqueued = queue.enqueue(
+        "report:1", {"order_id": "order:1"}, max_attempts=3, priority=10
+    )
+    job = queue.claim("worker-1", lease_ms=30_000)
+    if job is not None:
+        # Generate the local result while the lease is active.
+        completed = queue.ack(job["id"], job["lease_token"], operations=[
+            {"kind": "put", "collection": "reports", "key": job["id"],
+             "value": {"status": "ready"}},
+            {"kind": "put", "collection": "outbox", "key": job["id"] + ":ready",
+             "value": {"event_id": job["id"] + ":ready", "type": "report.ready"}},
+        ])
+        print("Completed:", completed)
+    print(queue.stats())
+```
+
+`enqueue()` returns `{inserted, job}`. Job IDs are retained after completion or
+failure: enqueueing an existing ID returns its existing job, without replacing
+its payload or resetting its state. This supports application-level deduplication
+while that job is retained. Use a new ID for new work, or `retry_dead()` to reset
+the attempts of a dead job explicitly.
+
+`claim()` returns a `Job` or `None`, prioritizing eligible jobs by descending
+priority. `delay_ms` controls when a newly queued job becomes available. Each
+claim consumes one attempt and returns an opaque `lease_token`. Acknowledgment,
+failure and lease extension require the matching token and a lease that has not
+expired. A stale or nonmatching token returns `False` without changing the job.
+
+`ack(..., operations=[...])` writes business documents, outbox events and the
+job's `done` state in one durable transaction. The operation list uses the same
+put/delete dictionaries as `batch()`. Invalid operations leave the job leased
+and apply no business writes. Operations cannot write to any `_cedro.jobs.*`
+collection; that namespace is reserved for the queue implementation.
+
+```python
+with Database("./worker.cedro") as db:
+    queue = db.queue("reports")
+    job = queue.claim("worker-1", lease_ms=30_000)
+    if job is not None:
+        queue.fail(
+            job["id"], job["lease_token"], "temporary upload failure",
+            retry_delay_ms=5_000,
+        )
+    recovery = queue.recover_expired(limit=10)
+    print(recovery)  # requeued, dead, has_more
+```
+
+`fail()` schedules a retry or marks the job `dead` when its attempt budget is
+exhausted. `claim()` can reclaim an expired lease if another attempt remains.
+Run `recover_expired()` periodically to requeue expired work and mark exhausted
+leases dead; repeat while `has_more` is true. Recovery processes 1..1000 jobs per
+call, additionally bounded by the transaction frame limit. `extend()` renews an
+active lease and never shortens its existing deadline. `retry_dead()` resets
+attempts to zero and makes a dead job available again.
+
+All queue methods accept an optional `now_ms` where applicable. The default is
+the current Unix epoch time in milliseconds; explicit timestamps make testing
+deterministic. Times and durations must be integers in `0..MAX_SAFE_INTEGER`
+(`2**53 - 1`); leases must be positive, and timestamp-plus-duration must also
+stay within that bound. Booleans are rejected as numeric options. Use a
+consistent clock across your workers: backward or forward clock jumps affect
+lease eligibility.
+
+Queue payload numbers are finite and restricted recursively to
+`[-MAX_SAFE_INTEGER, MAX_SAFE_INTEGER]` so Rust, Node and Python can exchange
+jobs safely. Ordinary collection documents and Python `ack()` business writes
+retain the full `[-2**63, 2**64 - 1]` integer range. Encode larger identifiers or
+exact decimal quantities as strings in job payloads.
+The job envelope also counts toward document and transaction limits, so the
+available payload budget is smaller than `max_document_bytes`.
+Allow headroom for lease tokens, worker names, errors and acknowledgment writes:
+a queued job fitting the configured limits does not mean every later transition
+will fit. Size-limit errors apply no partial transition or business writes. If a
+transition reaches capacity, close and reopen the store with higher document,
+frame or state limits as needed before retrying it.
+
+Queue names contain 1..128 ASCII letters, digits, `_`, `.` or `-`. Job IDs
+contain 1..4096 UTF-8 bytes, workers 1..128 bytes and errors 1..4096 bytes.
+IDs, workers, errors and tokens must be nonempty without NUL. `max_attempts` is
+1..1000 and priority is 0..1000. `Job` dictionaries include `schema_version`,
+`id`, `payload`, `status`, `attempts`, `max_attempts`, `priority`, `created_at`,
+`available_at`, `lease_until`, `lease_token`, `worker` and `last_error`.
+Statuses are `queued`, `leased`, `done` and `dead`. Lease fields are null when
+the job is not leased. `stats()` reports queued/leased/done/dead counts plus
+ready and expired counts; ready can include reclaimable expired leases.
+
+The application owns the worker loop, error handling, lease renewal and expired
+recovery. Operations are synchronous and scheduling scans jobs in O(n) time.
+One process owns the database directory; share its handle across threads.
+There is no background worker, retention policy or distributed scheduler.
+Completed/dead jobs remain stored and the append-only log continues growing.
+Generic CRUD, batch, CAS and conditional write operations targeting
+`_cedro.jobs.*` are rejected. Read-only collection inspection and conditions on
+that namespace remain available. Use the queue API to change job state.
+
+Lease tokens fence changes within the same database history. Restoring or
+copying a backup creates a history branch, where an old token may still exist;
+tokens do not fence external systems or independently restored stores. A worker
+can perform an external effect and crash before acknowledgment. Consumers must
+deduplicate effects by stable job/event ID; delivery is not exactly-once.
+
+Run `python examples/local_worker.py` for a deterministic retry, reopen and
+atomic acknowledgment with a business result and outbox event.
 
 ## Reserve inventory and publish its event atomically
 
@@ -259,10 +373,11 @@ compare equally only within the safe range ±2**53; booleans remain distinct.
 
 | Object | Methods |
 | --- | --- |
-| `Database` | `collection`, `batch`, `conditional_batch`, `transaction`, `changes`, `stats`, `verify`, `backup`, `close` |
+| `Database` | `collection`, `queue`, `batch`, `conditional_batch`, `transaction`, `changes`, `stats`, `verify`, `backup`, `close` |
 | `Database.restore_backup` | Static restore with optional content-limit keywords |
 | `Collection` | `put`, `get`, `delete`, `put_many`, `find`, `find_page`, `iter_records`, `create_index`, `compare_exchange`, `aggregate` |
 | `Transaction` | `put(collection, key, value)`, `delete(collection, key)`, `commit`, `rollback`, context manager |
+| `Queue` | `enqueue`, `claim`, `ack`, `fail`, `extend`, `get`, `stats`, `recover_expired`, `retry_dead` |
 
 `Database(path, *, max_document_bytes=1_048_576, max_frame_bytes=16_777_216,
 max_state_bytes=67_108_864)` opens or creates a directory. Paths accept strings
@@ -288,6 +403,8 @@ and a `py.typed` marker are included.
 - `aggregate(field)` uses floating-point arithmetic on a top-level numeric field
   and can lose integer precision above 2**53; stored documents remain exact.
 - No SQL, MVCC, replication, encryption or automatic synchronization.
+- Queue scheduling scans jobs synchronously, without background execution,
+  retention or distributed fencing; job numbers use the cross-SDK safe range.
 
 ## Upgrade from 0.2 to 0.3
 
@@ -309,6 +426,22 @@ update. Conditions test complete pre-state documents; they do not observe writes
 earlier in the operation list. A failed condition is a normal result, while an
 invalid request raises an exception.
 
+## Upgrade from 0.4 to 0.5
+
+Existing APIs and the database/backup formats remain compatible. Version 0.5
+adds `db.queue(name)` and the typed `Queue`, `Job`, `EnqueueResult`, `QueueStats`
+and `RecoveryResult` APIs. Jobs use schema version 1 in reserved
+`_cedro.jobs.<name>` collections and participate in the existing durable log,
+changefeed and backup format. Generic writes to that namespace are now rejected.
+If a 0.4 application used `_cedro.jobs.*` for its own data, export or move those
+records to another collection with the old version before upgrading. Existing
+logs still replay and can be inspected; legacy application records are not
+automatically converted into valid jobs. Keep that namespace out of application writes.
+Queue payloads have a smaller, portable numeric range; existing collection
+documents keep their previous range. Run expired recovery in your application
+and deduplicate external effects; existing outbox consumers may need to filter
+out internal queue operations from the changefeed.
+
 ## Build and test
 
 ```sh
@@ -320,9 +453,10 @@ maturin build --release --out dist
 maturin sdist --out dist
 python -m pip install ./dist/<your-platform-wheel>.whl
 python -m unittest discover -s tests -v
-python scripts/verify_sdist.py dist/cedrodb-0.4.0.tar.gz
+python scripts/verify_sdist.py dist/cedrodb-0.5.0.tar.gz
 python examples/offline_forms.py
 python examples/inventory_outbox.py
+python examples/local_worker.py
 ```
 
 `prepare_core.py` copies only the core manifest, license and Rust source into

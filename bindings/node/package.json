@@ -1,7 +1,7 @@
 {
   "name": "cedrodb",
-  "version": "0.4.0",
-  "description": "Experimental embedded document database powered by a native Rust engine: atomic batches, indexes, compare-and-exchange and durable change cursors.",
+  "version": "0.5.0",
+  "description": "Experimental embedded Rust database with guarded transactions, verified backups and persistent local job queues.",
   "main": "index.cjs",
   "module": "index.mjs",
   "types": "index.d.ts",
@@ -61,7 +61,10 @@
     "rust",
     "native",
     "documents",
-    "local-first",
+    "offline",
+    "job-queue",
+    "outbox",
+    "backup",
     "changefeed",
     "cedrodb"
   ]
