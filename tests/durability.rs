@@ -1,4 +1,4 @@
-use cedrodb::{Database, Options};
+use cedrodb::{Database, Error, Options};
 use serde_json::json;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -110,7 +110,10 @@ fn readers_only_observe_a_batch_after_commit() {
 fn a_second_database_handle_cannot_open_the_same_storage() {
     let directory = TestDirectory::new("exclusive");
     let first = Database::open(directory.path()).unwrap();
-    assert!(Database::open(directory.path()).is_err());
+    assert!(matches!(
+        Database::open(directory.path()),
+        Err(Error::DatabaseLocked)
+    ));
     drop(first);
     assert!(Database::open(directory.path()).is_ok());
 }
@@ -172,8 +175,10 @@ fn an_incomplete_tail_is_truncated_to_the_previous_transaction() {
     damaged.extend_from_slice(&[0x01, 0x02, 0x03]);
     fs::write(directory.log(), damaged).unwrap();
     let database = Database::open(directory.path()).unwrap();
-    assert_eq!(fs::read(directory.log()).unwrap(), baseline);
     assert!(database.get("records", "original").unwrap().is_some());
+    drop(database);
+    // Windows byte-range locks prohibit reading through a second file handle.
+    assert_eq!(fs::read(directory.log()).unwrap(), baseline);
 }
 
 #[test]

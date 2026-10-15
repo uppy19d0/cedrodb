@@ -222,7 +222,12 @@ impl Database {
             .open(directory.join("cedro.log"))?;
         match FileExt::try_lock_exclusive(&file) {
             Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+            Err(error)
+                if error.kind() == io::ErrorKind::WouldBlock
+                    || error.raw_os_error().is_some_and(|code| {
+                        Some(code) == fs2::lock_contended_error().raw_os_error()
+                    }) =>
+            {
                 return Err(Error::DatabaseLocked);
             }
             Err(error) => return Err(Error::Io(error)),
