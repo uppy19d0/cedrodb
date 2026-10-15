@@ -22,14 +22,22 @@ One open handle owns a database directory. Operations within it serialize throug
 
 ## Install
 
+Node.js 0.5.0 is available as a release download while npm account verification is pending:
+
+```sh
+npm install https://www.ltavarez.me/downloads/cedrodb-0.5.0.tgz
+```
+
+Once npm publication is verified, install by name:
+
 ```sh
 npm install cedrodb@0.5.0
 ```
 
-Python packages are available from [the platform selector](https://www.ltavarez.me/labs/cedrodb). Choose a matching wheel to avoid compiling. Until the PyPI publisher is configured, install the source distribution by URL:
+Install Python from [PyPI](https://pypi.org/project/cedrodb/0.5.0/). Pip selects a compatible wheel when available; direct release downloads remain available from [the platform selector](https://www.ltavarez.me/labs/cedrodb).
 
 ```sh
-python -m pip install https://www.ltavarez.me/downloads/cedrodb-0.5.0.tar.gz
+python -m pip install cedrodb==0.5.0
 ```
 
 Python supports 3.9+; its source distribution needs Rust 1.85+ and a platform linker. Node supports 18+, includes binaries for macOS ARM64/x64, Linux x64 with compatible glibc and Windows x64, and needs Rust 1.88+ for its source fallback. [Distribution details](docs/native-libraries.md).
