@@ -1,0 +1,15 @@
+[package]
+name = "cedrodb"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.74"
+description = "An experimental embedded document database with a durable transaction log"
+license = "MIT"
+repository = "https://github.com/uppy19d0/cedrodb"
+homepage = "https://www.ltavarez.me/labs/cedrodb"
+
+[dependencies]
+crc32fast = "1.4"
+fs2 = "0.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"

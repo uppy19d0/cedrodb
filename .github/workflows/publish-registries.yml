@@ -1,0 +1,67 @@
+name: Publish registries
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: Successful CedroDB CI run containing the distributions artifact
+        required: true
+        type: string
+      npm:
+        description: Publish to npm (requires npm authentication or a configured trusted publisher)
+        type: boolean
+        default: false
+      python:
+        description: Publish to PyPI (requires a configured trusted publisher)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  npm:
+    if: inputs.npm
+    runs-on: ubuntu-22.04
+    environment: npm
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.run_id }}
+          name: distributions
+          path: dist
+      - run: npm publish dist/downloads/*.tgz --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+  pypi:
+    if: inputs.python
+    runs-on: ubuntu-22.04
+    environment: pypi
+    permissions:
+      contents: read
+      actions: read
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.run_id }}
+          name: distributions
+          path: dist
+      - run: |
+          mkdir python-dist
+          cp dist/downloads/*.whl dist/downloads/*.tar.gz python-dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: python-dist/

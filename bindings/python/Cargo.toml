@@ -1,0 +1,27 @@
+[package]
+name = "cedrodb-python"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.85"
+description = "Native Python bindings for the CedroDB embedded database"
+license = "MIT"
+repository = "https://github.com/uppy19d0/cedrodb"
+homepage = "https://www.ltavarez.me/labs/cedrodb"
+publish = false
+include = ["src/**/*.rs", "Cargo.toml", "Cargo.lock", "LICENSE"]
+
+[lib]
+name = "_native"
+crate-type = ["cdylib"]
+
+[dependencies]
+cedrodb = { path = "core", version = "=0.2.0" }
+pyo3 = { version = "0.30.1", features = ["abi3-py39"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.release]
+lto = "thin"
+strip = "symbols"
+
+[workspace]

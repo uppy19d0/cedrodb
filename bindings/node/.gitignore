@@ -1,0 +1,5 @@
+/target/
+/core/
+/prebuilds/
+/*.tgz
+/node_modules/
