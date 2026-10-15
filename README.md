@@ -7,11 +7,11 @@ Motor de base de datos local escrito en Rust: documentos JSON, transacciones per
 ## Instalar en Node.js o Python
 
 ```sh
-npm install https://www.ltavarez.me/downloads/cedrodb-0.2.0.tgz
+npm install cedrodb@0.2.0
 python -m pip install https://www.ltavarez.me/downloads/cedrodb-0.2.0.tar.gz
 ```
 
-Estos comandos usan los paquetes descargables de la release. La publicación en los registros npm/PyPI requiere configurar las cuentas; no se anuncia como realizada. Node usa un binario incluido si coincide con su plataforma y compila desde fuente cuando no lo hay. El sdist de Python requiere compilar; los wheels compatibles evitan ese paso. Consulta [los requisitos, ejemplos y publicación de las librerías](docs/native-libraries.md).
+Node.js está disponible en [npm como `cedrodb@0.2.0`](https://www.npmjs.com/package/cedrodb/v/0.2.0). Python se instala desde los paquetes descargables de la release; su publicación en PyPI está pendiente. Node usa un binario incluido si coincide con su plataforma y compila desde fuente cuando no lo hay. El sdist de Python requiere compilar; los wheels compatibles evitan ese paso. Consulta [los requisitos, ejemplos y publicación de las librerías](docs/native-libraries.md).
 
 El diferenciador del proyecto es combinar almacenamiento de documentos y automatizaciones locales sobre el mismo registro: guardar un cambio y su evento en un lote atómico, consultar el historial por cursor y continuar desde el último checkpoint. Es una dirección de producto; no una afirmación de exclusividad frente a todas las bases de datos.
 

@@ -4,16 +4,16 @@ Las dos librerías llaman directamente a CedroDB Rust. No ejecutan un servidor, 
 
 ## Distribuciones 0.2.0
 
-Mientras se configura la publicación en npm/PyPI, los paquetes se instalan por URL con sus gestores habituales:
+La librería Node.js está publicada en [npm como `cedrodb@0.2.0`](https://www.npmjs.com/package/cedrodb/v/0.2.0). Python se instala desde los paquetes descargables de la release; su publicación en PyPI está pendiente:
 
 ```sh
-npm install https://www.ltavarez.me/downloads/cedrodb-0.2.0.tgz
+npm install cedrodb@0.2.0
 python -m pip install https://www.ltavarez.me/downloads/cedrodb-0.2.0.tar.gz
 ```
 
 El paquete npm contiene fuentes Rust y carga un binario compatible incluido cuando está disponible. Si no lo hay, compila al instalar: se necesitan Rust 1.88+, Cargo y un enlazador C de la plataforma. El sdist de Python necesita Rust 1.85+; un wheel compatible permite instalar sin compilar. Consulta los binarios y checksums de la release antes de elegir plataforma. Los binarios GNU/Linux generados en Ubuntu 22.04 requieren un entorno de glibc compatible; no se anuncian como binarios musl.
 
-La presencia de un paquete descargable no significa que el nombre esté publicado en un registro. El manifiesto del portafolio `demos/cedrodb-artifacts.json` enumera los archivos disponibles y el estado de publicación.
+El manifiesto del portafolio `demos/cedrodb-artifacts.json` enumera los archivos disponibles y el estado de publicación en cada registro.
 
 ## Node.js / TypeScript
 
@@ -82,8 +82,8 @@ Consulta las referencias completas en [Node](../bindings/node/README.md) y [Pyth
 
 El workflow manual `publish-registries.yml` toma los artefactos de una ejecución CI validada; no vuelve a construir otra versión para publicarla.
 
-Para la primera publicación npm, inicia sesión en la cuenta adecuada y publica el `.tgz` probado, o configura `NPM_TOKEN` en el entorno GitHub `npm`. Una vez creado el paquete, puede configurarse un trusted publisher.
+Para futuras versiones npm, publica el `.tgz` probado desde una sesión autenticada con 2FA, o configura un trusted publisher con permiso para `npm publish` en el job `npm`. Ese job también admite `NPM_TOKEN` en el entorno GitHub `npm` con los permisos de publicación correspondientes.
 
-Para PyPI, registra un publisher pendiente para el proyecto `cedrodb` con owner `uppy19d0`, repositorio `cedrodb`, workflow `publish-registries.yml` y entorno `pypi`. Ese registro requiere acceso a la cuenta PyPI. El workflow usa OIDC y no necesita un token guardado en el código.
+Para la primera publicación en PyPI, registra un publisher pendiente para el proyecto `cedrodb` con owner `uppy19d0`, repositorio `cedrodb`, workflow `publish-registries.yml` y entorno `pypi`. Ese registro requiere acceso a la cuenta PyPI. El workflow usa OIDC y no necesita un token guardado en el código.
 
 Activar un job de publicación sin configurar su cuenta fallará; no se presenta como una publicación realizada.
