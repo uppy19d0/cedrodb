@@ -124,6 +124,21 @@ function normalizeOperation(operation) {
   return { kind: 'put', collection, key, value: operation.value };
 }
 
+function normalizeCondition(condition) {
+  object(condition, 'condition', ['kind', 'collection', 'key', 'value']);
+  const collection = string(condition.collection, 'condition.collection');
+  const key = string(condition.key, 'condition.key');
+  if (condition.kind === 'absent') {
+    if (own(condition, 'value')) throw new TypeError('absent conditions cannot have a value');
+    return { kind: 'absent', collection, key };
+  }
+  if (condition.kind !== 'equals' || !own(condition, 'value')) {
+    throw new TypeError('Condition must be absent, or equals with a value');
+  }
+  validateJSON(condition.value);
+  return { kind: 'equals', collection, key, value: condition.value };
+}
+
 function normalizeOptions(options = {}) {
   object(options, 'options', ['maxDocumentBytes', 'maxFrameBytes', 'maxStateBytes']);
   const normalized = {};
@@ -165,6 +180,20 @@ class Database {
     if (!Array.isArray(operations)) throw new TypeError('batch requires an array');
     // Array.from visits holes, which normalizeOperation rejects before commit.
     this.#native.batch(JSON.stringify(Array.from(operations, normalizeOperation)));
+  }
+
+  conditionalBatch(request) {
+    object(request, 'conditional batch', ['conditions', 'operations']);
+    if (!Array.isArray(request.conditions) || !Array.isArray(request.operations)) {
+      throw new TypeError('conditionalBatch requires conditions and operations arrays');
+    }
+    if (request.conditions.length > 64) throw new RangeError('conditionalBatch supports at most 64 conditions');
+    const normalized = {
+      conditions: Array.from(request.conditions, normalizeCondition),
+      operations: Array.from(request.operations, normalizeOperation),
+    };
+    const result = JSON.parse(this.#native.conditionalBatchJson(JSON.stringify(normalized)));
+    return { applied: result.applied, failedCondition: result.failed_condition ?? null, cursor: result.cursor };
   }
 
   changes(options = {}) {
@@ -240,4 +269,4 @@ class Collection {
   aggregate(field) { return this.#database._aggregate(this.#name, field); }
 }
 
-module.exports = { Database, Collection, version: '0.3.0' };
+module.exports = { Database, Collection, version: '0.4.0' };

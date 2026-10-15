@@ -2,14 +2,14 @@
 
 A small embedded document database powered by the CedroDB Rust engine through N-API. Store JSON locally, commit related changes together, query indexed fields, and replay durable transactions without running a database server.
 
-**Experimental 0.3 release.** CedroDB keeps active documents in memory and persists a checksummed transaction log. This release adds strict log verification and verified backups that preserve transaction history and change cursors. It is intended for evaluation, local tools and applications whose storage limits fit the documented memory model.
+**Experimental 0.3 release.** CedroDB keeps active documents in memory and persists a checksummed transaction log. Capabilities include guarded transactions across collections, strict log verification and verified backups that preserve transaction history and change cursors. It is intended for evaluation, local tools and applications whose storage limits fit the documented memory model.
 
 [Project](https://github.com/uppy19d0/cedrodb) · [Architecture](https://github.com/uppy19d0/cedrodb/blob/main/docs/architecture.md) · [Backup and recovery](https://github.com/uppy19d0/cedrodb/blob/main/docs/backups.md) · [Python API](https://github.com/uppy19d0/cedrodb/tree/main/bindings/python) · [Interactive demo](https://www.ltavarez.me/labs/cedrodb)
 
 ## Install
 
 ```sh
-npm install cedrodb@0.3.0
+npm install cedrodb@0.4.0
 ```
 
 Requires **Node.js 18 or newer**. ESM, CommonJS and TypeScript are supported; the package has no npm runtime dependencies.
@@ -83,6 +83,33 @@ const removed = jobs.compareExchange('job:1', { state: 'running' }, undefined);
 
 For conditional updates, `undefined` means absent when used as the expected value and deletion when used as the replacement. `null` always means stored JSON null. A mismatch returns `false` without appending a transaction; absent-to-absent succeeds without writing. Comparison covers the complete document. Validation failures commit none of a batch. After a commit I/O error, close and reopen the database to resolve its outcome.
 
+### Guarded transactions across collections
+
+Use `conditionalBatch()` when several related changes depend on previously read data. The engine checks every guard against committed state, then commits all operations while holding the same database mutex:
+
+```js
+const inventory = db.collection('inventory');
+inventory.put('item:cedar', { available: 3, revision: 1 });
+const before = inventory.get('item:cedar');
+
+const result = db.conditionalBatch({
+  conditions: [
+    { kind: 'equals', collection: 'inventory', key: 'item:cedar', value: before },
+    { kind: 'absent', collection: 'orders', key: 'order:42' },
+  ],
+  operations: [
+    { kind: 'put', collection: 'inventory', key: 'item:cedar', value: { available: before.available - 1, revision: before.revision + 1 } },
+    { kind: 'put', collection: 'orders', key: 'order:42', value: { state: 'reserved' } },
+    { kind: 'put', collection: 'outbox', key: 'order:42:reserved', value: { type: 'order.reserved', orderId: 'order:42' } },
+  ],
+});
+console.log(result); // { applied: true, failedCondition: null, cursor: ... }
+```
+
+A mismatch returns `applied: false` and the zero-based `failedCondition` index, leaves every collection unchanged, and does not advance the durable cursor. Include a guard for every document your decision depends on. An `absent` guard forbids a value field; an `equals` guard requires a JSON value, with null distinct from absence. Conditions are evaluated before any operation, including operations on the guarded keys. The limit is 64 conditions, with normal document and transaction-frame limits. Invalid input throws even when another guard would mismatch. Matching empty batches succeed without writing; an empty condition list makes the batch unconditional.
+
+After a mismatch, applications can read fresh data and decide whether to retry. This API does not add snapshots or automatic retries, and the outbox example still requires deduplication when producing external effects. See the runnable [guarded inventory example](https://github.com/uppy19d0/cedrodb/blob/main/bindings/node/examples/guarded-inventory.mjs).
+
 ## Queries and durable changes
 
 ```js
@@ -147,6 +174,7 @@ Verification and backup hold the database lock and replay documents into additio
 | `collection.get(key)` | JSON value, or `undefined` when absent |
 | `collection.putMany([{ key, value }, ...])` | Commit one atomic batch |
 | `db.batch(operations)` | Commit puts/deletes across collections |
+| `db.conditionalBatch({ conditions, operations })` | `{ applied, failedCondition, cursor }`; commit only if every guard matches |
 | `collection.find(query?)` | One bounded array of `{ key, value }` records |
 | `collection.findPage(query?)` | `{ records, nextAfter?, scanned, usedIndex? }` |
 | `collection.createIndex(field)` | Build an equality index for this session |
@@ -175,13 +203,13 @@ Only plain JSON objects, dense standard arrays, strings, booleans, null and fini
 
 Structural equality ignores object property order. Exactly representable integral floats equal integers within the core's safe numeric range, including inside nested values; Python `1.0` can match JavaScript `1`. Booleans remain distinct from numbers. Decimal calculations retain normal IEEE 754 limitations. `aggregate()` uses floating-point arithmetic and supports a top-level field, not a nested JSON Pointer.
 
-## Limits and migration from 0.2
+## Limits and migration from 0.2 / 0.3
 
 The default limits are 1 MiB per document, 16 MiB per transaction frame and 64 MiB of encoded live content. Override them with `maxDocumentBytes`, `maxFrameBytes` and `maxStateBytes`. These are encoded-content limits, not a cap on total process RAM: all active documents, indexes, transaction offsets, results and verification replay consume memory. JSON nesting is limited to 64 levels.
 
 The append-only log has no compaction or retention yet. SQL, MVCC, automatic replication, encryption and concurrent multi-process ownership of a directory are not implemented. Do not edit, replace or remove an open database's log. There are no comparative benchmark claims against SQLite, MDBX or DuckDB.
 
-Version 0.3 adds `verify()`, `backup()` and `Database.restoreBackup()` without changing the 0.2 document/query API or log format. Existing directories open directly. Ordinary opening still recovers an incomplete final append according to the engine's recovery rules; `verify()` is strict and never repairs a log. The new backup container must be restored through the backup API rather than copied over a live log. Recreate session indexes after opening the restored directory, and resume the changefeed from a cursor belonging to that restored history.
+Version 0.3 added `verify()`, `backup()` and `Database.restoreBackup()`. Version 0.4 adds `conditionalBatch()` for guarded changes across collections. Both additions preserve the earlier document/query API and log format, so existing directories open directly. Ordinary opening still recovers an incomplete final append according to the engine's recovery rules; `verify()` is strict and never repairs a log. A backup container must be restored through the backup API rather than copied over a live log. Recreate session indexes after opening the restored directory, and resume the changefeed from a cursor belonging to that restored history.
 
 ## Build and test
 
@@ -193,6 +221,7 @@ npm run build
 npm test
 npm pack
 node examples/offline-backup.mjs
+node examples/guarded-inventory.mjs
 ```
 
 The build vendors only the core `Cargo.toml`, `Cargo.lock`, `src/` and license into `core/`. Packed packages include those sources plus locked Rust dependencies and build without a path outside the package. Build native artifacts separately for each platform; a successful source build on one platform does not establish compatibility with another.

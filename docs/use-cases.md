@@ -20,6 +20,10 @@ Use JSON Pointer filters, create equality indexes for selective lookups and pagi
 
 The application owns validation, user permissions and memory sizing. Do not load data exceeding configured limits or available RAM.
 
-## Next recipes
+## Inventory reservations and request idempotency
 
-Guarded inventory reservations and durable local jobs are planned for later releases. Their APIs will be documented as implemented only after code and tests land. See [the release roadmap](roadmap.md).
+Use a conditional batch to require an unchanged stock document and an absent order key, then update stock, create the order and record an outbox event in one frame. Contenders using the same expected stock cannot both reserve the last item. A stable order key rejects replayed requests. See [the full contract and example](conditional-batches.md). The application still owns stock rules and conflict handling.
+
+## Next recipe
+
+Durable local jobs are planned for 0.5. See [the release roadmap](roadmap.md).

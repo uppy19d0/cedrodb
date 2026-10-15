@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "cedrodb"
-version = "0.3.0"
+version = "0.4.0"
 description = "Embedded Rust document database with atomic batches, indexes and a durable changefeed"
 readme = "README.md"
 requires-python = ">=3.9"

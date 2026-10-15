@@ -10,8 +10,15 @@ const same: typeof Database = cedrodb.Database;
 const verified: number = db.verify().transactions;
 const backedUp: number = db.backup('./new-backup.cedro').logBytes;
 const restored: number = Database.restoreBackup('./new-backup.cedro', './new-data', { maxStateBytes: 1024 }).records;
-void [values, next, cursor, same, verified, backedUp, restored];
+const conditional = db.conditionalBatch({
+  conditions: [{ kind: 'absent', collection: 'orders', key: 'order:1' }],
+  operations: [{ kind: 'put', collection: 'orders', key: 'order:1', value: { state: 'paid' } }],
+});
+const failed: number | null = conditional.failedCondition;
+void [values, next, cursor, same, verified, backedUp, restored, failed];
 // @ts-expect-error BigInt is not a JSON document.
 jobs.put('a', 1n);
 // @ts-expect-error Query operator is a closed set.
 jobs.find({ filters: [{ field: 'score', op: 'contains', value: 1 }] });
+// @ts-expect-error absent is a distinct condition without a value field.
+db.conditionalBatch({ conditions: [{ kind: 'absent', collection: 'c', key: 'a', value: null }], operations: [] });

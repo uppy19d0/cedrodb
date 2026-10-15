@@ -6,7 +6,7 @@ Each release must solve a concrete application problem, describe failures and pa
 | --- | --- | --- |
 | 0.2 | Keep local documents and events together | Atomic frames, cursors, index/CAS/SDK tests |
 | 0.3 | Recover offline data before upgrades | Checked complete backups, no-overwrite restoration, corruption/truncation tests |
-| 0.4 planned | Reserve stock only when every dependency is unchanged | Conditional multi-document batches, conflict and concurrent-contender tests |
+| 0.4 | Reserve stock only when every dependency is unchanged | Conditional multi-document batches, conflict and concurrent-contender tests |
 | 0.5 planned | Resume interrupted local background jobs | Durable leases, scheduling, bounded retries, stale-worker fencing, dead letters |
 | 0.6 planned | Import external datasets predictably | Bounded ingestion, reject records, validation and restart checkpoints |
 | 0.7 planned | Establish storage failure behavior | I/O fault injection, process interruption, fuzzing and reproductions |

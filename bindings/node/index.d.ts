@@ -19,6 +19,11 @@ export interface QueryPage<T extends JsonValue = JsonValue> {
 export type BatchOperation =
   | { kind: 'put'; collection: string; key: string; value: JsonValue }
   | { kind: 'delete'; collection: string; key: string };
+export type Condition =
+  | { kind: 'absent'; collection: string; key: string }
+  | { kind: 'equals'; collection: string; key: string; value: JsonValue };
+export interface ConditionalBatchRequest { conditions: Condition[]; operations: BatchOperation[] }
+export interface ConditionalResult { applied: boolean; failedCondition: number | null; cursor: number }
 export interface ChangeTransaction { cursor: number; operations: BatchOperation[] }
 export interface ChangePage { transactions: ChangeTransaction[]; nextCursor: number; hasMore: boolean }
 export interface Stats {
@@ -39,6 +44,8 @@ export class Database {
   close(): void;
   /** Commit all operations together, or commit none if validation fails. */
   batch(operations: BatchOperation[]): void;
+  /** Check up to 64 guards against committed state, then commit one atomic batch if all match. */
+  conditionalBatch(request: ConditionalBatchRequest): ConditionalResult;
   /** since is an exclusive durable transaction cursor; limits count transactions. */
   changes(options?: { since?: number; limit?: number }): ChangePage;
   stats(): Stats;
@@ -65,4 +72,4 @@ export class Collection<T extends JsonValue = JsonValue> {
   /** Numeric summary over a top-level field; floating-point arithmetic. */
   aggregate(field: string): Aggregate;
 }
-export const version: '0.3.0';
+export const version: '0.4.0';

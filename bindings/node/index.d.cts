@@ -13,6 +13,9 @@ declare namespace cedrodb {
   type Query = API.Query;
   type QueryPage<T extends API.JsonValue = API.JsonValue> = API.QueryPage<T>;
   type BatchOperation = API.BatchOperation;
+  type Condition = API.Condition;
+  type ConditionalBatchRequest = API.ConditionalBatchRequest;
+  type ConditionalResult = API.ConditionalResult;
   type ChangeTransaction = API.ChangeTransaction;
   type ChangePage = API.ChangePage;
   type Stats = API.Stats;

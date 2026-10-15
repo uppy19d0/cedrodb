@@ -1,4 +1,4 @@
-use cedrodb::{Database, Filter, FilterOp, Query};
+use cedrodb::{ChangeOperation, Condition, Database, Filter, FilterOp, Query};
 use serde_json::json;
 use std::path::PathBuf;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -85,6 +85,62 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         database.compare_exchange("outbox", "event:001", Some(expected), Some(processed))?;
     let changes = database.changes(0, 10)?;
     let stats = database.stats()?;
+    let verified = database.verify()?;
+    let backup_path = directory.0.join("orders.cedrobak");
+    database.backup(&backup_path)?;
+    let restored_path = directory.0.join("restored");
+    let restored_report = Database::restore_backup(&backup_path, &restored_path)?;
+    let restored = Database::open(&restored_path)?;
+    let cursors_preserved = restored.changes(0, 10)? == changes;
+    drop(restored);
+    let stock = Database::open(directory.0.join("stock-demo"))?;
+    let expected_stock = json!({"available":1,"revision":1});
+    stock.put("inventory", "sku:1", expected_stock.clone())?;
+    let conditions = vec![
+        Condition::Absent {
+            collection: "orders".into(),
+            key: "order:1".into(),
+        },
+        Condition::Equals {
+            collection: "inventory".into(),
+            key: "sku:1".into(),
+            value: expected_stock.clone(),
+        },
+    ];
+    let operations = vec![
+        ChangeOperation::Put {
+            collection: "inventory".into(),
+            key: "sku:1".into(),
+            value: json!({"available":0,"revision":2}),
+        },
+        ChangeOperation::Put {
+            collection: "orders".into(),
+            key: "order:1".into(),
+            value: json!({"sku":"sku:1","quantity":1}),
+        },
+        ChangeOperation::Put {
+            collection: "outbox".into(),
+            key: "event:1".into(),
+            value: json!({"type":"stock.reserved","order":"order:1"}),
+        },
+    ];
+    let reserved = stock.conditional_batch(&conditions, &operations)?;
+    let duplicate = stock.conditional_batch(&conditions, &operations)?;
+    let stale = stock.conditional_batch(
+        &[
+            Condition::Absent {
+                collection: "orders".into(),
+                key: "order:2".into(),
+            },
+            Condition::Equals {
+                collection: "inventory".into(),
+                key: "sku:1".into(),
+                value: expected_stock,
+            },
+        ],
+        &operations,
+    )?;
+    let remaining = stock.get("inventory", "sku:1")?.unwrap()["available"].clone();
     let output = json!({
         "engine": {"name": "CedroDB", "version": env!("CARGO_PKG_VERSION")},
         "generatedBy": "cargo run --example portfolio_demo",
@@ -99,6 +155,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "compare_exchange": {"matched": matched, "mismatch_rejected": !retry},
             "stats": stats
         },
+        "use_cases": {
+            "maintenance": {"verified":verified,"restored":restored_report,"cursors_preserved":cursors_preserved},
+            "inventory": {"reserved":reserved.applied,"duplicate_rejected":!duplicate.applied,
+                "stale_rejected":!stale.applied,"failed_condition":stale.failed_condition,
+                "remaining":remaining,"orders":stock.scan("orders")?.len(),
+                "outbox_events":stock.scan("outbox")?.len(),"cursor":stock.stats()?.latest_cursor}
+        },
         "capabilities": [
             "Rust engine with its own append-only transaction log",
             "JSON documents, committed reads and ordered scans",
@@ -108,7 +171,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Resumable durable changefeed with complete transaction boundaries",
             "Atomic compare-and-exchange and transactional outbox building blocks",
             "JSON Pointer filters, ordered cursor pagination and handle-local equality indexes",
-            "Exclusive database file lock"
+            "Exclusive database file lock",
+            "Verified full-history backups and validated no-overwrite restoration",
+            "Atomic conditional batches spanning inventory, orders and outbox"
         ],
         "limitations": [
             format!("Experimental v{}: not production validated", env!("CARGO_PKG_VERSION")),

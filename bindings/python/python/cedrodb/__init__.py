@@ -17,11 +17,12 @@ from typing import (
 
 from ._native import CedroError, DatabaseClosedError, NativeDatabase
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 __all__ = [
     "Database", "Collection", "Transaction", "CedroError", "DatabaseClosedError",
     "MISSING", "DELETE", "JSONValue", "Filter", "Record", "QueryPage",
-    "ChangePage", "Stats", "IntegrityReport", "__version__",
+    "ChangePage", "Stats", "IntegrityReport", "Condition", "AbsentCondition",
+    "EqualsCondition", "ConditionalResult", "__version__",
 ]
 
 JSONValue = Union[None, bool, int, float, str, List["JSONValue"], Dict[str, "JSONValue"]]
@@ -78,6 +79,28 @@ class IntegrityReport(TypedDict):
     transactions: int
     records: int
     content_bytes: int
+
+
+class AbsentCondition(TypedDict):
+    kind: Literal["absent"]
+    collection: str
+    key: str
+
+
+class EqualsCondition(TypedDict):
+    kind: Literal["equals"]
+    collection: str
+    key: str
+    value: JSONValue
+
+
+Condition = Union[AbsentCondition, EqualsCondition]
+
+
+class ConditionalResult(TypedDict):
+    applied: bool
+    failed_condition: Optional[int]
+    cursor: int
 
 
 class Aggregate(TypedDict):
@@ -218,6 +241,21 @@ class Database:
         """Create a buffered write batch that commits on a successful with exit."""
         self._check_open()
         return Transaction(self)
+
+    def conditional_batch(
+        self, conditions: Iterable[Condition], operations: Iterable[Mapping]
+    ) -> ConditionalResult:
+        """Atomically commit a batch only if all pre-state conditions match.
+
+        Up to 64 absent/equals conditions are checked against the same committed
+        state, before any write. A mismatch returns the zero-based failing
+        condition index and unchanged cursor, without appending to the log.
+        Missing records and equals(value=None) differ. Invalid requests raise
+        before mutation, including when a condition would fail.
+        """
+        self._check_open()
+        request = {"conditions": list(conditions), "operations": list(operations)}
+        return json.loads(self._native.conditional_batch_json(_dumps(request)))
 
     def changes(self, since: int = 0, limit: int = 100) -> ChangePage:
         """Read durable transactions after an exclusive cursor, including reopened history.

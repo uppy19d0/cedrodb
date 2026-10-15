@@ -42,6 +42,12 @@ def main():
         raise ValueError("Unexpected conditional update result")
     if advanced["changes"]["next_cursor"] != 2 or len(advanced["changes"]["transactions"]) != 2:
         raise ValueError("Unexpected durable changefeed result")
+    cases = fixture["use_cases"]
+    if not cases["maintenance"]["cursors_preserved"] or cases["maintenance"]["verified"] != cases["maintenance"]["restored"]:
+        raise ValueError("Backup restoration did not preserve verified history")
+    inventory = cases["inventory"]
+    if not all(inventory[name] for name in ["reserved", "duplicate_rejected", "stale_rejected"]) or inventory["remaining"] != 0 or inventory["orders"] != 1 or inventory["outbox_events"] != 1:
+        raise ValueError("Guarded stock reservation produced unexpected results")
 
     fixed = ["Cargo.toml", "Cargo.lock", "README.md", "CHANGELOG.md", "LICENSE", ".gitignore"]
     sources = [root / name for name in fixed]

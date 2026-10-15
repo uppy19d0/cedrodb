@@ -17,9 +17,11 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 mod advanced;
+mod conditional;
 mod maintenance;
 mod query;
 pub use advanced::{ChangeOperation, ChangePage, ChangeTransaction, Stats};
+pub use conditional::{Condition, ConditionalResult};
 pub use maintenance::IntegrityReport;
 pub use query::{Filter, FilterOp, Query, QueryPage, Record};
 

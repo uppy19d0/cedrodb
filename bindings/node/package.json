@@ -1,6 +1,6 @@
 {
   "name": "cedrodb",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Experimental embedded document database powered by a native Rust engine: atomic batches, indexes, compare-and-exchange and durable change cursors.",
   "main": "index.cjs",
   "module": "index.mjs",

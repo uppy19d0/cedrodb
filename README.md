@@ -4,7 +4,7 @@
 
 CedroDB is a Rust engine with native Node.js/TypeScript and Python libraries. Documents, atomic batches and a durable transaction changefeed share one storage format. Save a document and its outbox event together, process complete transactions, and resume from a saved cursor.
 
-**0.3.0 is experimental.** We are approaching 1.0 through incremental, tested releases. The engine is not production validated; there are no superiority claims against SQLite, MDBX, UnQLite or DuckDB.
+**0.4.0 is experimental.** We are approaching 1.0 through incremental, tested releases. The engine is not production validated; there are no superiority claims against SQLite, MDBX, UnQLite or DuckDB.
 
 [Node API](bindings/node/README.md) · [Python API](bindings/python/README.md) · [Backups](docs/backups.md) · [Recipes](docs/use-cases.md) · [Changelog](CHANGELOG.md) · [Road to 1.0](docs/roadmap.md) · [Live examples](https://www.ltavarez.me/labs/cedrodb)
 
@@ -22,13 +22,13 @@ One open handle owns a database directory. Operations within it serialize throug
 ## Install
 
 ```sh
-npm install cedrodb@0.3.0
+npm install cedrodb@0.4.0
 ```
 
 Python packages are available from [the platform selector](https://www.ltavarez.me/labs/cedrodb). Choose a matching wheel to avoid compiling. Until the PyPI publisher is configured, install the source distribution by URL:
 
 ```sh
-python -m pip install https://www.ltavarez.me/downloads/cedrodb-0.3.0.tar.gz
+python -m pip install https://www.ltavarez.me/downloads/cedrodb-0.4.0.tar.gz
 ```
 
 Python supports 3.9+; its source distribution needs Rust 1.85+ and a platform linker. Node supports 18+, includes binaries for macOS ARM64/x64, Linux x64 with compatible glibc and Windows x64, and needs Rust 1.88+ for its source fallback. [Distribution details](docs/native-libraries.md).
@@ -76,13 +76,14 @@ with Database('./restored.cedro') as restored:
 
 Backups preserve the complete log and transaction cursors. The versioned container checks its expected length and CRC32; restoration validates it before creating a new destination. CRC32 detects accidental corruption, not malicious modification. Backup and verification hold the engine mutex. [Recovery procedures and limits](docs/backups.md).
 
-## Features in 0.3
+## Features in 0.4
 
 - JSON documents, explicit collection/key names and atomic cross-collection batches.
 - Versioned append-only frames with length checks, CRC32 and `sync_all` before changes become visible.
 - Incomplete-tail recovery; complete corrupted frames produce an error.
 - AND filters (`eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `exists`), nested JSON Pointers, equality indexes and ordered keyset pages.
 - Atomic compare-and-exchange, numeric aggregates and operational statistics.
+- [Conditional cross-document batches](docs/conditional-batches.md) for guarded stock reservations and idempotent request keys.
 - Durable changefeed with complete transactions and bounded encoded pages.
 - Read-only integrity checks, consistent full-history backup files and validated restoration without overwriting existing destinations.
 - Native SDKs, TypeScript ESM/CommonJS types, Python type hints and shared Node/Python storage.
@@ -104,7 +105,7 @@ These are not RSS limits: maps, indexes, decoded JSON, result copies and tempora
 
 JavaScript rejects unsafe integers instead of rounding Rust/Python data. Python supports integers in [-2^63, 2^64−1]. Structural equality treats exactly equivalent integer/float values within ±2^53 alike, with booleans distinct. Aggregates use `f64` and can lose integer precision above 2^53; use an appropriate exact representation for accounting.
 
-The 0.3 log remains compatible with 0.2. Backup containers are separate. See [architecture](docs/architecture.md), [migration notes](docs/migrations.md) and [benchmark protocol](docs/benchmarks.md).
+The 0.4 log remains compatible with 0.2. Backup containers are separate. See [architecture](docs/architecture.md), [migration notes](docs/migrations.md) and [benchmark protocol](docs/benchmarks.md).
 
 SQL, MVCC, replication, encryption, multi-process database access and a C ABI are not implemented. Durability depends on OS/filesystem/device synchronization. A commit I/O failure poisons the handle: close/reopen to resolve the uncertain outcome before retrying. Process-kill tests do not certify physical power-loss behavior.
 

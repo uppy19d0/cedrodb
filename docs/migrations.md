@@ -8,6 +8,10 @@ Close a database before opening its directory from another process or language. 
 
 Recreate indexes after reopening or restoration. Complete backups retain transaction cursors, but a cursor after an older backup's final transaction is invalid in that copy. Numeric ranges, null/missing distinctions and floating-point aggregate behavior are unchanged.
 
+## 0.3 to 0.4
+
+The log remains compatible. Conditional batches are additive; conditions are evaluated before writes and are not stored as new log operations. Existing backups/restore and cursors keep their format. Guard all read dependencies explicitly and handle a mismatch before retrying.
+
 ## Pre-1.0 policy
 
 Incompatible format/API changes must have release and migration notes. A stable backward/forward compatibility contract is a gate for 1.0, not a guarantee already established by the project.

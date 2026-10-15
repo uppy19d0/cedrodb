@@ -76,7 +76,7 @@ test('restore rejects corrupt, truncated and raw-log inputs before creating its 
   const contents = fs.readFileSync(backup);
   const corrupt = Buffer.from(contents);
   corrupt[corrupt.length - 1] ^= 0x01;
-  const cases = [corrupt, contents.subarray(0, contents.length - 1), Buffer.concat([contents, Buffer.from([0])]), fs.readFileSync(path.join(directory, 'cedro.log'))];
+  const cases = [corrupt, contents.subarray(0, contents.length - 1), Buffer.concat([contents, Buffer.from([0])]), contents.subarray(32)];
   for (const [index, bytes] of cases.entries()) {
     const input = path.join(root, `invalid-${index}.backup`);
     const target = path.join(root, `invalid-target-${index}`);
@@ -106,6 +106,13 @@ test('strict verification detects an incomplete tail without repairing the live 
   const { database, directory, root } = fixture(t);
   database.collection('c').put('a', true);
   const log = path.join(directory, 'cedro.log');
+  // Windows enforces the exclusive OS lock even against external writes.
+  if (process.platform === 'win32') {
+    const before = database.verify();
+    assert.throws(() => fs.appendFileSync(log, Buffer.from([0x12, 0x34, 0x56])), { code: 'EBUSY' });
+    assert.deepEqual(database.verify(), before);
+    return;
+  }
   // Controlled fault injection: applications must never mutate an open log.
   fs.appendFileSync(log, Buffer.from([0x12, 0x34, 0x56]));
   const damaged = fs.readFileSync(log);
@@ -126,4 +133,3 @@ test('backup APIs validate paths and options and reject operations after closing
   assert.throws(() => database.verify(), /closed/);
   assert.throws(() => database.backup(path.join(root, 'closed.backup')), /closed/);
 });
-

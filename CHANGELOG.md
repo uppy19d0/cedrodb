@@ -2,6 +2,13 @@
 
 All releases remain experimental. Future work is separate in [the roadmap](docs/roadmap.md).
 
+## 0.4.0 — 2026-10-15
+
+- Added atomic conditional batches across documents/collections, with absent/equals guards and conflict details.
+- Added guarded inventory/order/outbox examples, concurrent-contender tests and null/missing/numeric edge cases.
+- Added native Node/Python methods and typed results. Mismatches do not write frames or advance cursors.
+- Preserved the transaction log format and all 0.3 maintenance APIs.
+
 ## 0.3.0 — 2026-10-15
 
 - Added full log verification without silent repair.

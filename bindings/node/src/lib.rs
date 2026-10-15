@@ -1,6 +1,6 @@
 //! Thin N-API bridge. Persistence, queries, indexes and concurrency decisions
 //! belong to the shared CedroDB Rust engine, never to a JavaScript copy.
-use cedrodb::{Database, Options, Query};
+use cedrodb::{ChangeOperation, Condition, Database, Options, Query};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
 use serde::Deserialize;
@@ -95,6 +95,13 @@ enum BatchOperation {
     },
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConditionalRequest {
+    conditions: Vec<Condition>,
+    operations: Vec<ChangeOperation>,
+}
+
 #[napi]
 pub struct NativeDatabase {
     database: Option<Database>,
@@ -176,6 +183,27 @@ impl NativeDatabase {
             }
         }
         transaction.commit().map_err(engine_error)
+    }
+
+    #[napi]
+    pub fn conditional_batch_json(&self, request_json: String) -> Result<String> {
+        let request: ConditionalRequest = decode(&request_json)?;
+        for condition in &request.conditions {
+            if let Condition::Equals { value, .. } = condition {
+                validate_portable_json(value)?;
+            }
+        }
+        for operation in &request.operations {
+            if let ChangeOperation::Put { value, .. } = operation {
+                validate_portable_json(value)?;
+            }
+        }
+        encode(
+            &self
+                .database()?
+                .conditional_batch(&request.conditions, &request.operations)
+                .map_err(engine_error)?,
+        )
     }
 
     #[napi]

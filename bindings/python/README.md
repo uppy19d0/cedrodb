@@ -4,7 +4,9 @@
 CedroDB is an embedded document engine written in Rust, with a native Python API.
 A form submission and its outbox event can commit together, indexed queries find
 pending work, and a durable changefeed lets your application resume processing
-after restarting. Version 0.3 adds integrity verification and portable backups.
+after restarting. Conditional batches reserve resources and append events only
+when all expected documents still match. Integrity verification and portable
+backups preserve the recovery history.
 
 Use it for offline forms and inspections, desktop application state, local
 automation, or small services that need JSON documents without running a database
@@ -18,10 +20,10 @@ claims or production-readiness guarantees.
 
 ## Installation
 
-For the 0.3.0 release on PyPI:
+For the 0.4.0 release on PyPI:
 
 ```sh
-python -m pip install cedrodb==0.3.0
+python -m pip install cedrodb==0.4.0
 ```
 
 PyPI publication requires the project's publisher configuration. If that version
@@ -30,7 +32,7 @@ from [GitHub Releases](https://github.com/uppy19d0/cedrodb/releases), then insta
 the downloaded file:
 
 ```sh
-python -m pip install ./cedrodb-0.3.0.tar.gz
+python -m pip install ./cedrodb-0.4.0.tar.gz
 ```
 
 A compatible wheel needs no Rust toolchain at runtime. Source installation
@@ -137,6 +139,50 @@ with Database("./app.cedro") as db:
     ])
 ```
 
+## Reserve inventory and publish its event atomically
+
+Use a conditional batch when a decision depends on more than one document. The
+engine checks every condition against the same committed state while holding
+the write lock, then commits all operations together. This closes the gap
+between checking inventory and updating inventory plus its outbox event.
+
+```python
+from cedrodb import Database
+
+with Database("./shop.cedro") as db:
+    db.collection("inventory").put("desk", {"available": 10})
+    result = db.conditional_batch([
+        {"kind": "equals", "collection": "inventory", "key": "desk", "value": {"available": 10}},
+        {"kind": "absent", "collection": "outbox", "key": "order:1"},
+    ], [
+        {"kind": "put", "collection": "inventory", "key": "desk", "value": {"available": 9}},
+        {"kind": "put", "collection": "outbox", "key": "order:1",
+         "value": {"event_id": "order:1", "type": "inventory.reserved"}},
+    ])
+    print(result)  # {"applied": True, "failed_condition": None, "cursor": 2}
+```
+
+Conditions are `absent` or `equals` for a complete JSON value, with at most 64
+conditions per call. `absent` forbids a `value` field. `equals` requires `value`;
+`value=None` matches stored null and does not match a missing key. Operations
+use the same put/delete dictionaries as `batch()`.
+
+On a mismatch, the result has `applied=False`, the zero-based index of the first
+failing condition, and the unchanged current `cursor`; no writes or log frame
+are produced. On success, `failed_condition` is `None` and `cursor` identifies
+the committed transaction. An empty operation list checks conditions without
+advancing the cursor. Empty conditions provide an unconditional atomic batch.
+
+The entire request is validated before mutation, even if a condition would
+fail. Unsupported JSON, extra fields, invalid locations or limits raise an
+exception. A conditional batch provides atomic optimistic checks within one
+database handle; it does not provide a distributed lock or prevent repeated
+external effects. Retry stale inventory decisions after reading current state,
+and deduplicate event deliveries in the consumer.
+
+Run `python examples/inventory_outbox.py` for a successful reservation, a rejected
+stale request, and its durable history after reopening.
+
 ## Verify, back up and restore
 
 A backup contains the committed log inside a versioned container with a length
@@ -213,7 +259,7 @@ compare equally only within the safe range ±2**53; booleans remain distinct.
 
 | Object | Methods |
 | --- | --- |
-| `Database` | `collection`, `batch`, `transaction`, `changes`, `stats`, `verify`, `backup`, `close` |
+| `Database` | `collection`, `batch`, `conditional_batch`, `transaction`, `changes`, `stats`, `verify`, `backup`, `close` |
 | `Database.restore_backup` | Static restore with optional content-limit keywords |
 | `Collection` | `put`, `get`, `delete`, `put_many`, `find`, `find_page`, `iter_records`, `create_index`, `compare_exchange`, `aggregate` |
 | `Transaction` | `put(collection, key, value)`, `delete(collection, key)`, `commit`, `rollback`, context manager |
@@ -253,6 +299,16 @@ create them. Restore requires a new destination and preserves the original
 history/cursor sequence. Recreate equality indexes after opening the restored
 store, and configure matching limits when your store exceeds the defaults.
 
+## Upgrade from 0.3 to 0.4
+
+Existing APIs and the database/backup formats stay compatible. Version 0.4 adds
+`db.conditional_batch(conditions, operations)` and typed `Condition` and
+`ConditionalResult` definitions. Replace application-level get/check/batch
+sequences with conditional batches when a stale read could overwrite another
+update. Conditions test complete pre-state documents; they do not observe writes
+earlier in the operation list. A failed condition is a normal result, while an
+invalid request raises an exception.
+
 ## Build and test
 
 ```sh
@@ -264,8 +320,9 @@ maturin build --release --out dist
 maturin sdist --out dist
 python -m pip install ./dist/<your-platform-wheel>.whl
 python -m unittest discover -s tests -v
-python scripts/verify_sdist.py dist/cedrodb-0.3.0.tar.gz
+python scripts/verify_sdist.py dist/cedrodb-0.4.0.tar.gz
 python examples/offline_forms.py
+python examples/inventory_outbox.py
 ```
 
 `prepare_core.py` copies only the core manifest, license and Rust source into

@@ -1,7 +1,7 @@
 //! Native calls only: Python handles its public JSON ergonomics, while every
 //! database operation, transaction and recovery runs in the shared Rust core.
 
-use cedrodb::{Database, Options, Query};
+use cedrodb::{ChangeOperation, Condition, Database, Options, Query};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use serde::Deserialize;
@@ -35,6 +35,13 @@ enum BatchOperation {
         collection: String,
         key: String,
     },
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConditionalRequest {
+    conditions: Vec<Condition>,
+    operations: Vec<ChangeOperation>,
 }
 
 #[pyclass(frozen, module = "cedrodb._native")]
@@ -149,6 +156,19 @@ impl NativeDatabase {
                     .map_err(engine_error)?;
                 }
                 transaction.commit().map_err(engine_error)
+            })
+        })
+    }
+
+    fn conditional_batch_json(&self, py: Python<'_>, request: &str) -> PyResult<String> {
+        py.detach(|| {
+            let request: ConditionalRequest = parse(request)?;
+            self.with_database(|database| {
+                encode(
+                    &database
+                        .conditional_batch(&request.conditions, &request.operations)
+                        .map_err(engine_error)?,
+                )
             })
         })
     }
