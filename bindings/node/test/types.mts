@@ -7,7 +7,10 @@ const page = jobs.findPage({ after: 'a', limit: 10 });
 const next: string | undefined = page.nextAfter;
 const cursor: number = db.changes().nextCursor;
 const same: typeof Database = cedrodb.Database;
-void [values, next, cursor, same];
+const verified: number = db.verify().transactions;
+const backedUp: number = db.backup('./new-backup.cedro').logBytes;
+const restored: number = Database.restoreBackup('./new-backup.cedro', './new-data', { maxStateBytes: 1024 }).records;
+void [values, next, cursor, same, verified, backedUp, restored];
 // @ts-expect-error BigInt is not a JSON document.
 jobs.put('a', 1n);
 // @ts-expect-error Query operator is a closed set.

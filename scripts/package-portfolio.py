@@ -43,7 +43,7 @@ def main():
     if advanced["changes"]["next_cursor"] != 2 or len(advanced["changes"]["transactions"]) != 2:
         raise ValueError("Unexpected durable changefeed result")
 
-    fixed = ["Cargo.toml", "Cargo.lock", "README.md", "LICENSE", ".gitignore"]
+    fixed = ["Cargo.toml", "Cargo.lock", "README.md", "CHANGELOG.md", "LICENSE", ".gitignore"]
     sources = [root / name for name in fixed]
     for directory in ["src", "examples", "tests", "docs", "scripts", ".github", "bindings"]:
         sources.extend(path for path in (root / directory).rglob("*") if path.is_file())
@@ -90,7 +90,13 @@ def main():
                 with tarfile.open(path, mode="r:gz") as package:
                     platforms = sorted({pathlib.PurePosixPath(name).parent.name for name in package.getnames()
                                         if name.endswith("/cedrodb.node") and "/prebuilds/" in name})
-    manifest = {"version": version, "registries": {"npm": False, "pypi": False},
+    registries = {"npm": False, "pypi": False}
+    previous_manifest = demos / "cedrodb-artifacts.json"
+    if previous_manifest.exists():
+        previous = json.loads(previous_manifest.read_text())
+        if previous.get("version") == version:
+            registries = {name: previous.get("registries", {}).get(name) is True for name in registries}
+    manifest = {"version": version, "registries": registries,
                 "node_prebuilds": platforms, "artifacts": artifacts}
     (demos / "cedrodb-artifacts.json").write_text(json.dumps(manifest, indent=2) + "\n")
     print(json.dumps({"fixture": str(demos / "cedrodb-results.json"), "archive": str(downloads / filename),

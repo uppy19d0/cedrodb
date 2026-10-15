@@ -1,21 +1,41 @@
 {
   "name": "cedrodb",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Experimental embedded document database powered by a native Rust engine: atomic batches, indexes, compare-and-exchange and durable change cursors.",
   "main": "index.cjs",
   "module": "index.mjs",
   "types": "index.d.ts",
   "exports": {
     ".": {
-      "import": { "types": "./index.d.mts", "default": "./index.mjs" },
-      "require": { "types": "./index.d.cts", "default": "./index.cjs" }
+      "import": {
+        "types": "./index.d.mts",
+        "default": "./index.mjs"
+      },
+      "require": {
+        "types": "./index.d.cts",
+        "default": "./index.cjs"
+      }
     },
     "./package.json": "./package.json"
   },
   "files": [
-    "index.cjs", "index.mjs", "index.d.ts", "index.d.mts", "index.d.cts", "native.cjs", "platform.cjs",
-    "Cargo.toml", "Cargo.lock", "build.rs", "src", "core", "scripts",
-    "prebuilds", "README.md", "LICENSE", "examples"
+    "index.cjs",
+    "index.mjs",
+    "index.d.ts",
+    "index.d.mts",
+    "index.d.cts",
+    "native.cjs",
+    "platform.cjs",
+    "Cargo.toml",
+    "Cargo.lock",
+    "build.rs",
+    "src",
+    "core",
+    "scripts",
+    "prebuilds",
+    "README.md",
+    "LICENSE",
+    "examples"
   ],
   "scripts": {
     "build": "node scripts/vendor-core.mjs && node scripts/build.mjs",
@@ -24,10 +44,25 @@
     "test": "node --test test/*.test.cjs",
     "example": "node examples/quickstart.mjs"
   },
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "license": "MIT",
   "homepage": "https://www.ltavarez.me/labs/cedrodb",
-  "repository": { "type": "git", "url": "git+https://github.com/uppy19d0/cedrodb.git", "directory": "bindings/node" },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/uppy19d0/cedrodb.git",
+    "directory": "bindings/node"
+  },
   "author": "Luis Tavarez",
-  "keywords": ["database", "embedded", "rust", "native", "documents", "local-first", "changefeed", "cedrodb"]
+  "keywords": [
+    "database",
+    "embedded",
+    "rust",
+    "native",
+    "documents",
+    "local-first",
+    "changefeed",
+    "cedrodb"
+  ]
 }

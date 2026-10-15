@@ -26,10 +26,14 @@ export interface Stats {
   logBytes: number; latestCursor: number; indexes: number;
 }
 export interface Aggregate { count: number; sum: number; min: number | null; max: number | null }
+/** Verified persisted log contents; counters exclude session indexes. */
+export interface IntegrityReport { logBytes: number; transactions: number; records: number; contentBytes: number }
 
 /** All operations are synchronous and block the calling Node.js thread. */
 export class Database {
   constructor(path: string, options?: DatabaseOptions);
+  /** Validate a backup and restore it into a new directory. Existing targets are rejected. */
+  static restoreBackup(backupPath: string, destinationPath: string, options?: DatabaseOptions): IntegrityReport;
   collection<T extends JsonValue = JsonValue>(name: string): Collection<T>;
   /** Idempotently close the native handle and release its exclusive file lock. */
   close(): void;
@@ -38,6 +42,10 @@ export class Database {
   /** since is an exclusive durable transaction cursor; limits count transactions. */
   changes(options?: { since?: number; limit?: number }): ChangePage;
   stats(): Stats;
+  /** Strictly verify every persisted frame without modifying or repairing the log. */
+  verify(): IntegrityReport;
+  /** Write a verified backup container to a new file. Existing files are rejected. */
+  backup(path: string): IntegrityReport;
 }
 export class Collection<T extends JsonValue = JsonValue> {
   constructor(database: Database, name: string);
@@ -57,4 +65,4 @@ export class Collection<T extends JsonValue = JsonValue> {
   /** Numeric summary over a top-level field; floating-point arithmetic. */
   aggregate(field: string): Aggregate;
 }
-export const version: '0.2.0';
+export const version: '0.3.0';

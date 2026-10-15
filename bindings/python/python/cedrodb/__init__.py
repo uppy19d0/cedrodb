@@ -17,11 +17,11 @@ from typing import (
 
 from ._native import CedroError, DatabaseClosedError, NativeDatabase
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 __all__ = [
     "Database", "Collection", "Transaction", "CedroError", "DatabaseClosedError",
     "MISSING", "DELETE", "JSONValue", "Filter", "Record", "QueryPage",
-    "ChangePage", "Stats", "__version__",
+    "ChangePage", "Stats", "IntegrityReport", "__version__",
 ]
 
 JSONValue = Union[None, bool, int, float, str, List["JSONValue"], Dict[str, "JSONValue"]]
@@ -71,6 +71,13 @@ class Stats(TypedDict):
     log_bytes: int
     latest_cursor: int
     indexes: int
+
+
+class IntegrityReport(TypedDict):
+    log_bytes: int
+    transactions: int
+    records: int
+    content_bytes: int
 
 
 class Aggregate(TypedDict):
@@ -229,6 +236,47 @@ class Database:
     def stats(self) -> Stats:
         self._check_open()
         return json.loads(self._native.stats_json())
+
+    def verify(self) -> IntegrityReport:
+        """Verify the committed log and return its integrity report.
+
+        This performs a synchronous read of the log and does not repair it.
+        """
+        self._check_open()
+        return json.loads(self._native.verify_json())
+
+    def backup(self, path: Union[str, os.PathLike]) -> IntegrityReport:
+        """Write a verified backup file without overwriting an existing path.
+
+        The backup preserves committed transaction history and changefeed
+        cursors. Handle-local index definitions must be recreated after restore.
+        """
+        self._check_open()
+        location = _string(os.fspath(path), "backup path")
+        return json.loads(self._native.backup_json(location))
+
+    @staticmethod
+    def restore_backup(
+        backup_path: Union[str, os.PathLike],
+        destination_path: Union[str, os.PathLike],
+        *,
+        max_document_bytes: int = 1_048_576,
+        max_frame_bytes: int = 16_777_216,
+        max_state_bytes: int = 67_108_864,
+    ) -> IntegrityReport:
+        """Verify and restore a backup into a directory that does not yet exist.
+
+        Returns a report, without opening or retaining a database handle. Use
+        the same content limits when restoring and opening a custom-sized store.
+        """
+        backup = _string(os.fspath(backup_path), "backup path")
+        destination = _string(os.fspath(destination_path), "destination path")
+        options = (
+            _positive_integer(max_document_bytes, "max_document_bytes"),
+            _positive_integer(max_frame_bytes, "max_frame_bytes"),
+            _positive_integer(max_state_bytes, "max_state_bytes"),
+        )
+        return json.loads(NativeDatabase.restore_backup_json(backup, destination, *options))
 
 
 class Collection:

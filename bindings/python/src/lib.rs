@@ -217,6 +217,41 @@ impl NativeDatabase {
             self.with_database(|database| encode(&database.stats().map_err(engine_error)?))
         })
     }
+
+    fn verify_json(&self, py: Python<'_>) -> PyResult<String> {
+        py.detach(|| {
+            self.with_database(|database| encode(&database.verify().map_err(engine_error)?))
+        })
+    }
+
+    fn backup_json(&self, py: Python<'_>, path: &str) -> PyResult<String> {
+        py.detach(|| {
+            self.with_database(|database| encode(&database.backup(path).map_err(engine_error)?))
+        })
+    }
+
+    #[staticmethod]
+    #[pyo3(signature = (backup_path, destination_path, max_document_bytes=1_048_576, max_frame_bytes=16_777_216, max_state_bytes=67_108_864))]
+    fn restore_backup_json(
+        py: Python<'_>,
+        backup_path: &str,
+        destination_path: &str,
+        max_document_bytes: usize,
+        max_frame_bytes: usize,
+        max_state_bytes: usize,
+    ) -> PyResult<String> {
+        py.detach(|| {
+            let options = Options {
+                max_document_bytes,
+                max_frame_bytes,
+                max_state_bytes,
+            };
+            encode(
+                &Database::restore_backup_with_options(backup_path, destination_path, options)
+                    .map_err(engine_error)?,
+            )
+        })
+    }
 }
 
 #[pymodule]

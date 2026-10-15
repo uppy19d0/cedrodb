@@ -111,7 +111,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Exclusive database file lock"
         ],
         "limitations": [
-            "Experimental v0.2: not production validated",
+            format!("Experimental v{}: not production validated", env!("CARGO_PKG_VERSION")),
             "One open database handle/process and one active write transaction",
             "Committed data is held in memory; no log compaction or retention",
             "Equality indexes are recreated per handle and use additional memory",

@@ -124,19 +124,37 @@ function normalizeOperation(operation) {
   return { kind: 'put', collection, key, value: operation.value };
 }
 
+function normalizeOptions(options = {}) {
+  object(options, 'options', ['maxDocumentBytes', 'maxFrameBytes', 'maxStateBytes']);
+  const normalized = {};
+  for (const [publicName, engineName] of [
+    ['maxDocumentBytes', 'max_document_bytes'], ['maxFrameBytes', 'max_frame_bytes'], ['maxStateBytes', 'max_state_bytes'],
+  ]) {
+    if (own(options, publicName)) normalized[engineName] = integer(options[publicName], publicName, 1);
+  }
+  return JSON.stringify(normalized);
+}
+
+function integrityReport(raw) {
+  const report = JSON.parse(raw);
+  return {
+    logBytes: report.log_bytes, transactions: report.transactions,
+    records: report.records, contentBytes: report.content_bytes,
+  };
+}
+
 class Database {
   #native;
 
   constructor(path, options = {}) {
     string(path, 'path');
-    object(options, 'options', ['maxDocumentBytes', 'maxFrameBytes', 'maxStateBytes']);
-    const normalized = {};
-    for (const [publicName, engineName] of [
-      ['maxDocumentBytes', 'max_document_bytes'], ['maxFrameBytes', 'max_frame_bytes'], ['maxStateBytes', 'max_state_bytes'],
-    ]) {
-      if (own(options, publicName)) normalized[engineName] = integer(options[publicName], publicName, 1);
-    }
-    this.#native = new NativeDatabase(path, JSON.stringify(normalized));
+    this.#native = new NativeDatabase(path, normalizeOptions(options));
+  }
+
+  static restoreBackup(backupPath, destinationPath, options = {}) {
+    return integrityReport(NativeDatabase.restoreBackup(
+      string(backupPath, 'backupPath'), string(destinationPath, 'destinationPath'), normalizeOptions(options),
+    ));
   }
 
   collection(name) { return new Collection(this, string(name, 'collection name')); }
@@ -165,6 +183,10 @@ class Database {
       latestCursor: result.latest_cursor, indexes: result.indexes,
     };
   }
+
+  verify() { return integrityReport(this.#native.verify()); }
+
+  backup(path) { return integrityReport(this.#native.backup(string(path, 'backup path'))); }
 
   _get(collection, key) {
     const raw = this.#native.get(collection, string(key, 'key'));
@@ -218,4 +240,4 @@ class Collection {
   aggregate(field) { return this.#database._aggregate(this.#name, field); }
 }
 
-module.exports = { Database, Collection, version: '0.2.0' };
+module.exports = { Database, Collection, version: '0.3.0' };

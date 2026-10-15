@@ -17,8 +17,10 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 mod advanced;
+mod maintenance;
 mod query;
 pub use advanced::{ChangeOperation, ChangePage, ChangeTransaction, Stats};
+pub use maintenance::IntegrityReport;
 pub use query::{Filter, FilterOp, Query, QueryPage, Record};
 
 const HEADER: &[u8; 16] = b"CEDRODB\0\x01\0\0\0\0\0\0\0";
@@ -85,7 +87,7 @@ impl From<serde_json::Error> for Error {
 /// Encoded-content limits. Map/allocator overhead and working buffers are extra.
 ///
 /// State bytes count JSON value bytes plus UTF-8 collection/key bytes per record.
-/// The log is not compacted in version 0.2 and can grow without a disk-size limit.
+/// The log is not compacted and can grow without a disk-size limit.
 /// Optional indexes and an eight-byte offset per transaction are additional RAM.
 #[derive(Debug, Clone, Copy)]
 pub struct Options {

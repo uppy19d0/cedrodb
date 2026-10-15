@@ -1,4 +1,4 @@
-# Arquitectura de CedroDB 0.2
+# Arquitectura de CedroDB: formato de log 1
 
 ## Modelo
 

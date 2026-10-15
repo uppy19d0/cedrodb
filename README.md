@@ -1,155 +1,123 @@
 # CedroDB
 
-Motor de base de datos local escrito en Rust: documentos JSON, transacciones persistentes, consultas indexadas y un flujo de cambios que permite reanudar automatizaciones después de reiniciar. Incluye librerías nativas para Node.js/TypeScript y Python.
+**Embedded JSON storage for applications that resume local work after a restart.**
 
-**Versión 0.2.0 experimental.** Es un motor nuevo con registro de almacenamiento propio. Todavía no está validado para producción y no se ha demostrado superioridad frente a SQLite, libmdbx, UnQLite o DuckDB.
+CedroDB is a Rust engine with native Node.js/TypeScript and Python libraries. Documents, atomic batches and a durable transaction changefeed share one storage format. Save a document and its outbox event together, process complete transactions, and resume from a saved cursor.
 
-## Instalar en Node.js o Python
+**0.3.0 is experimental.** We are approaching 1.0 through incremental, tested releases. The engine is not production validated; there are no superiority claims against SQLite, MDBX, UnQLite or DuckDB.
+
+[Node API](bindings/node/README.md) · [Python API](bindings/python/README.md) · [Backups](docs/backups.md) · [Recipes](docs/use-cases.md) · [Changelog](CHANGELOG.md) · [Road to 1.0](docs/roadmap.md) · [Live examples](https://www.ltavarez.me/labs/cedrodb)
+
+## Application fit
+
+| Application | CedroDB provides | The application still owns |
+| --- | --- | --- |
+| Offline forms and desktop tools | JSON documents, consistent backup files and checked restoration | Validation, encryption, off-device copies and conflict resolution |
+| Local integrations | A document and outbox event in one atomic batch; durable resume cursors | Delivery, checkpoints and destination deduplication |
+| Small catalogs and operational tools | JSON Pointer filters, equality indexes and keyset pages | Schema, index recreation after opening and a memory budget |
+| Maintenance before upgrades | Full-history backups and integrity checks without silent repair | Scheduling, restore drills and retention |
+
+One open handle owns a database directory. Operations within it serialize through a mutex and all live documents remain in RAM. Choose an established database when you need mature production guarantees, SQL, multi-process access or data larger than the available memory.
+
+## Install
 
 ```sh
-npm install cedrodb@0.2.0
-python -m pip install https://www.ltavarez.me/downloads/cedrodb-0.2.0.tar.gz
+npm install cedrodb@0.3.0
 ```
 
-Node.js está disponible en [npm como `cedrodb@0.2.0`](https://www.npmjs.com/package/cedrodb/v/0.2.0). Python se instala desde los paquetes descargables de la release; su publicación en PyPI está pendiente. Node usa un binario incluido si coincide con su plataforma y compila desde fuente cuando no lo hay. El sdist de Python requiere compilar; los wheels compatibles evitan ese paso. Consulta [los requisitos, ejemplos y publicación de las librerías](docs/native-libraries.md).
+Python packages are available from [the platform selector](https://www.ltavarez.me/labs/cedrodb). Choose a matching wheel to avoid compiling. Until the PyPI publisher is configured, install the source distribution by URL:
 
-El diferenciador del proyecto es combinar almacenamiento de documentos y automatizaciones locales sobre el mismo registro: guardar un cambio y su evento en un lote atómico, consultar el historial por cursor y continuar desde el último checkpoint. Es una dirección de producto; no una afirmación de exclusividad frente a todas las bases de datos.
+```sh
+python -m pip install https://www.ltavarez.me/downloads/cedrodb-0.3.0.tar.gz
+```
 
-## Ejecutar
+Python supports 3.9+; its source distribution needs Rust 1.85+ and a platform linker. Node supports 18+, includes binaries for macOS ARM64/x64, Linux x64 with compatible glibc and Windows x64, and needs Rust 1.88+ for its source fallback. [Distribution details](docs/native-libraries.md).
 
-Requiere Rust y Cargo. Desde esta carpeta:
+## Save a document and its event together
+
+```js
+import { Database } from 'cedrodb';
+
+const db = new Database('./orders.cedro'); // A directory.
+try {
+  db.batch([
+    { kind: 'put', collection: 'orders', key: 'order:1',
+      value: { status: 'paid', amount: 120 } },
+    { kind: 'put', collection: 'outbox', key: 'event:1',
+      value: { type: 'order.paid', orderId: 'order:1' } },
+  ]);
+  db.collection('orders').createIndex('status');
+  const paid = db.collection('orders').findPage({
+    filters: [{ field: 'status', op: 'eq', value: 'paid' }],
+  });
+  const changes = db.changes({ since: 0, limit: 50 });
+  console.log(paid.records, changes.nextCursor);
+} finally {
+  db.close();
+}
+```
+
+Persist a consumer cursor after processing. A crash between delivery and checkpoint persistence can cause delivery again. Consumers must be idempotent; no exactly-once external effects are promised.
+
+## Back up before upgrading an offline application
+
+```python
+from cedrodb import Database
+
+with Database('./field-data.cedro') as db:
+    db.collection('forms').put('form:1', {'status': 'draft', 'site': 'SDQ'})
+    report = db.verify()
+    db.backup('./before-upgrade.cedrobak')  # Must not exist.
+
+Database.restore_backup('./before-upgrade.cedrobak', './restored.cedro')
+with Database('./restored.cedro') as restored:
+    assert restored.collection('forms').get('form:1')['site'] == 'SDQ'
+```
+
+Backups preserve the complete log and transaction cursors. The versioned container checks its expected length and CRC32; restoration validates it before creating a new destination. CRC32 detects accidental corruption, not malicious modification. Backup and verification hold the engine mutex. [Recovery procedures and limits](docs/backups.md).
+
+## Features in 0.3
+
+- JSON documents, explicit collection/key names and atomic cross-collection batches.
+- Versioned append-only frames with length checks, CRC32 and `sync_all` before changes become visible.
+- Incomplete-tail recovery; complete corrupted frames produce an error.
+- AND filters (`eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `exists`), nested JSON Pointers, equality indexes and ordered keyset pages.
+- Atomic compare-and-exchange, numeric aggregates and operational statistics.
+- Durable changefeed with complete transactions and bounded encoded pages.
+- Read-only integrity checks, consistent full-history backup files and validated restoration without overwriting existing destinations.
+- Native SDKs, TypeScript ESM/CommonJS types, Python type hints and shared Node/Python storage.
+
+Indexes are session-local: recreate them after opening. Separate calls/pages do not share a snapshot. APIs are synchronous; use a worker for disk-heavy work when the application's main thread must stay responsive.
+
+## Resource and compatibility boundaries
+
+| Default encoded-content limit | Value |
+| --- | --- |
+| Document | 1 MiB |
+| Transaction payload | 16 MiB |
+| Live state | 64 MiB |
+| JSON depth | 64 levels |
+| Query page | 1–1,000 records |
+| Equality indexes per handle | 64 |
+
+These are not RSS limits: maps, indexes, decoded JSON, result copies and temporary verification state consume additional RAM. Changefeed offsets use eight bytes per transaction. The log/backups retain history; compaction and automatic retention are not implemented.
+
+JavaScript rejects unsafe integers instead of rounding Rust/Python data. Python supports integers in [-2^63, 2^64−1]. Structural equality treats exactly equivalent integer/float values within ±2^53 alike, with booleans distinct. Aggregates use `f64` and can lose integer precision above 2^53; use an appropriate exact representation for accounting.
+
+The 0.3 log remains compatible with 0.2. Backup containers are separate. See [architecture](docs/architecture.md), [migration notes](docs/migrations.md) and [benchmark protocol](docs/benchmarks.md).
+
+SQL, MVCC, replication, encryption, multi-process database access and a C ABI are not implemented. Durability depends on OS/filesystem/device synchronization. A commit I/O failure poisons the handle: close/reopen to resolve the uncertain outcome before retrying. Process-kill tests do not certify physical power-loss behavior.
+
+## Build and contribute
 
 ```sh
 cargo test --locked
-cargo run --locked --example basic -- ./cedro-data
+cargo clippy --locked --all-targets -- -D warnings
 cargo run --locked --example portfolio_demo
 ```
 
-El ejemplo `basic` crea o abre el directorio indicado, guarda dos pedidos y consulta sus importes. `portfolio_demo` usa un directorio temporal propio, confirma tres pedidos y un evento outbox en el mismo lote, descarta una transacción y vuelve a abrir la base. Después ejecuta una consulta indexada, un compare-and-exchange y lee el changefeed antes de emitir JSON. Ese resultado alimenta el ejemplo del portafolio; el navegador muestra una ejecución guardada, no ejecuta el motor Rust.
+The core currently targets Rust 1.74+; SDK source builds require the higher versions above. Rust is not published on crates.io; use a local path dependency. The [roadmap](docs/roadmap.md) defines the evidence gates for 1.0. Crash recovery tests, malformed-input cases and interoperability reproductions are especially useful contributions.
 
-## Usar como dependencia local
+## License
 
-El paquete todavía no se ha publicado en crates.io. Después de descargar o copiar el código:
-
-```toml
-[dependencies]
-cedrodb = { path = "../cedrodb" }
-serde_json = "1"
-```
-
-```rust
-use cedrodb::Database;
-use serde_json::json;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let db = Database::open("orders.cedro")?; // Es un directorio.
-    let mut tx = db.begin_write()?;
-    tx.put("orders", "order:001", json!({
-        "customer": "Ana", "amount": 125.5, "status": "paid"
-    }))?;
-    tx.put("orders", "order:002", json!({
-        "customer": "Luis", "amount": 74.5, "status": "paid"
-    }))?;
-    tx.commit()?;
-
-    assert_eq!(db.aggregate("orders", "amount")?.sum, 200.0);
-    println!("{:?}", db.get("orders", "order:001")?);
-    Ok(())
-}
-```
-
-## Capacidades actuales
-
-- Colecciones con claves UTF-8 y valores JSON, incluidos objetos, listas y escalares.
-- `put`, reemplazo y `delete` agrupados en una transacción. Descartarla sin `commit` abandona sus operaciones.
-- Lecturas del estado confirmado y recorridos ordenados por clave.
-- Registro append-only con versión, longitud y CRC32 por transacción.
-- Confirmación con `sync_all` antes de publicar los cambios en memoria.
-- Recuperación de una cola incompleta al abrir; un frame completo con checksum inválido produce error.
-- Lock de archivo exclusivo para impedir otra apertura cooperativa del mismo almacenamiento.
-- Agregaciones `count`, `sum`, `min`, `max` de un campo numérico de primer nivel.
-- Consultas con filtros `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `exists`, combinados con AND; campos directos o JSON Pointer (`/profile/city`).
-- Paginación ordenada por clave mediante un cursor exclusivo `after`, con hasta 1,000 resultados por página.
-- Índices de igualdad por sesión, actualizados junto con el estado confirmado y seleccionados por cantidad de candidatos.
-- Compare-and-exchange atómico para actualizar o eliminar sólo si el documento esperado sigue vigente.
-- Changefeed durable con cursores por transacción y páginas limitadas por cantidad y bytes codificados.
-- Estadísticas de documentos, colecciones, bytes de contenido, registro, cursores e índices.
-
-La API es síncrona. El handle puede compartirse entre hilos; un mutex serializa las operaciones. Sólo puede existir una transacción de escritura activa y una apertura del almacenamiento. Una llamada de lectura observa un estado confirmado; varias llamadas o páginas no forman un snapshot común. Los índices se crean con `create_index` después de abrir; no se guardan sus definiciones en disco. Hay un máximo de 64 índices por handle y 64 filtros por consulta.
-
-## Cambios durables y actualizaciones condicionales
-
-```rust
-use cedrodb::Database;
-use serde_json::json;
-
-fn main() -> cedrodb::Result<()> {
-    let db = Database::open("cedro-data")?;
-    db.put("jobs", "job:001", json!({"status":"pending"}))?;
-    let claimed = db.compare_exchange(
-        "jobs", "job:001",
-        Some(json!({"status":"pending"})),
-        Some(json!({"status":"running"})),
-    )?;
-    let page = db.changes(0, 100)?;
-    println!("claimed={claimed}, checkpoint={}", page.next_cursor);
-    Ok(())
-}
-```
-
-El cursor comienza en 0 y es exclusivo; identifica el orden de frames completos, sobrevive a la reapertura y pertenece al historial concreto de esa base. `next_cursor` avanza sólo por transacciones devueltas. Un lote vacío y un CAS que no coincide no añaden frames. Cada página tiene como máximo `max_frame_bytes + 12` bytes de frames codificados y nunca parte una transacción. La estructura JSON decodificada y las copias del SDK consumen memoria adicional.
-
-La aplicación guarda su checkpoint después de procesar los cambios. Entregar a un servicio externo y guardar ese checkpoint no constituye una sola transacción: los consumidores deben manejar reintentos y deduplicación. El outbox garantiza que el registro del evento y el cambio local se confirman juntos; no garantiza efectos externos exactamente una vez.
-
-## Recursos y números
-
-`Database::open_with_options(path, Options { .. })` permite limitar el contenido codificado:
-
-| Límite predeterminado | Tamaño |
-| --- | --- |
-| Documento JSON | 1 MiB |
-| Payload de transacción | 16 MiB |
-| Contenido del estado confirmado | 64 MiB |
-| Nombre de colección | 1–1,024 bytes UTF-8 |
-| Clave | 1–4,096 bytes UTF-8 |
-
-El límite de estado cuenta valores JSON codificados y nombres de colección/clave por registro. **No es un límite de RAM del proceso:** mapas, strings, buffers, operaciones pendientes y copias de resultados consumen memoria adicional. Todos los documentos confirmados permanecen en memoria. Los índices también usan RAM; el changefeed conserva un offset de ocho bytes por transacción confirmada, sin duplicar los documentos históricos. `scan` devuelve una copia de la colección. El registro crece con el historial y aún no hay compactación.
-
-La profundidad máxima de documentos es 64. Al reabrir, los límites deben permitir reproducir los documentos y las transacciones ya guardados; un límite nuevo más bajo puede impedir la apertura.
-
-Las agregaciones convierten números a `f64`, ignoran campos ausentes, nulos y no numéricos, y rechazan sumas no finitas. `count` cuenta valores numéricos, no todos los documentos. Los enteros mayores que 2^53 pueden perder precisión durante la agregación; su valor JSON almacenado se conserva. Para importes que requieran aritmética exacta hace falta un agregado entero/decimal específico, previsto para otra versión.
-
-Eq/Ne/CAS comparan JSON recursivamente; enteros y flotantes equivalentes dentro de ±2^53 coinciden, para que `1.0` escrito por Python pueda compararse con `1` de JavaScript. Booleanos y números son distintos. Los enteros grandes se comparan exactamente entre sí; su orden frente a flotantes se rechaza. Los filtros Eq/Ne/Exists se resuelven antes de los ordenados, por lo que crear un índice no introduce errores de conversión en documentos ya excluidos.
-
-## Persistencia y recuperación
-
-Cada transacción confirmada ocupa un frame completo del registro `cedro.log`. Una reapertura aplica exclusivamente frames completos y válidos. Si el final contiene una escritura incompleta, se trunca hasta la última transacción completa. Un checksum inválido, versión desconocida, JSON inválido o longitud fuera del límite no se repara silenciosamente.
-
-Ante un error de escritura o sincronización, el handle queda inutilizable hasta cerrarlo y reabrirlo. El resultado de esa transacción puede ser incierto: la reapertura determina qué frame quedó completo. La aplicación debe contemplarlo al decidir un reintento.
-
-Las garantías dependen del sistema operativo, del sistema de archivos y del dispositivo de almacenamiento. Las pruebas de terminación de proceso y truncamiento de archivos no certifican comportamiento ante cortes eléctricos reales. Usa un sistema de archivos local; no edites, sustituyas ni borres el registro mientras está abierto. CRC32 detecta corrupción accidental y no autentica datos.
-
-## Diseño y evolución
-
-Tomamos como referencias el almacenamiento transaccional de libmdbx, la integración de documentos de UnQLite y el procesamiento analítico de DuckDB. Esta primera versión implementa un subconjunto propio; no combina sus motores ni hereda sus garantías.
-
-1. **0.1:** registro transaccional, documentos, recuperación y agregaciones por escaneo.
-2. **0.2 actual:** consultas paginadas, índices de igualdad por sesión, CAS, changefeed y SDKs nativos Node/Python.
-3. **Siguiente etapa:** más inyección de fallos de I/O, fuzzing, mediciones e índices persistentes.
-4. **Después de medir:** compactación con una política explícita de cursores/retención, consultas vectorizadas e interfaz C.
-
-SQL, MVCC, replicación, cifrado, consultas distribuidas y sincronización entre dispositivos no están implementados. El log 0.2 conserva el formato 0.1; futuras versiones anteriores a la estabilidad pueden cambiarlo. No hay migrador ni política de compactación/retención todavía.
-
-Consulta [la arquitectura](docs/architecture.md) y [el protocolo de comparación](docs/benchmarks.md).
-
-## Regenerar los archivos del portafolio
-
-```sh
-python3 scripts/package-portfolio.py --portfolio ../portfolio-loading --sdk-dir dist
-```
-
-El script ejecuta el ejemplo Rust, valida el resultado y crea `public/demos/cedrodb-results.json`, el ZIP de código fuente descargable y su SHA-256. Requiere Python 3.9 o superior. No incluye bases de datos, dependencias compiladas ni archivos del entorno local.
-
-## Licencia
-
-MIT. Las dependencias conservan sus respectivas licencias.
+MIT. Dependencies retain their respective licenses.

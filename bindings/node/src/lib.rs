@@ -69,6 +69,18 @@ struct BindingOptions {
     max_state_bytes: Option<usize>,
 }
 
+fn binding_options(options_json: &str) -> Result<Options> {
+    let input: BindingOptions = decode(options_json)?;
+    let defaults = Options::default();
+    Ok(Options {
+        max_document_bytes: input
+            .max_document_bytes
+            .unwrap_or(defaults.max_document_bytes),
+        max_frame_bytes: input.max_frame_bytes.unwrap_or(defaults.max_frame_bytes),
+        max_state_bytes: input.max_state_bytes.unwrap_or(defaults.max_state_bytes),
+    })
+}
+
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum BatchOperation {
@@ -100,18 +112,28 @@ impl NativeDatabase {
 impl NativeDatabase {
     #[napi(constructor)]
     pub fn new(path: String, options_json: String) -> Result<Self> {
-        let input: BindingOptions = decode(&options_json)?;
-        let defaults = Options::default();
-        let options = Options {
-            max_document_bytes: input
-                .max_document_bytes
-                .unwrap_or(defaults.max_document_bytes),
-            max_frame_bytes: input.max_frame_bytes.unwrap_or(defaults.max_frame_bytes),
-            max_state_bytes: input.max_state_bytes.unwrap_or(defaults.max_state_bytes),
-        };
         Ok(Self {
-            database: Some(Database::open_with_options(path, options).map_err(engine_error)?),
+            database: Some(
+                Database::open_with_options(path, binding_options(&options_json)?)
+                    .map_err(engine_error)?,
+            ),
         })
+    }
+
+    #[napi]
+    pub fn restore_backup(
+        backup_path: String,
+        destination_path: String,
+        options_json: String,
+    ) -> Result<String> {
+        encode(
+            &Database::restore_backup_with_options(
+                backup_path,
+                destination_path,
+                binding_options(&options_json)?,
+            )
+            .map_err(engine_error)?,
+        )
     }
 
     #[napi]
@@ -211,6 +233,16 @@ impl NativeDatabase {
     #[napi]
     pub fn stats(&self) -> Result<String> {
         encode(&self.database()?.stats().map_err(engine_error)?)
+    }
+
+    #[napi]
+    pub fn verify(&self) -> Result<String> {
+        encode(&self.database()?.verify().map_err(engine_error)?)
+    }
+
+    #[napi]
+    pub fn backup(&self, path: String) -> Result<String> {
+        encode(&self.database()?.backup(path).map_err(engine_error)?)
     }
 
     #[napi]

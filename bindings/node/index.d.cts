@@ -17,5 +17,6 @@ declare namespace cedrodb {
   type ChangePage = API.ChangePage;
   type Stats = API.Stats;
   type Aggregate = API.Aggregate;
+  type IntegrityReport = API.IntegrityReport;
 }
 export = cedrodb;
