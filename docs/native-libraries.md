@@ -4,14 +4,12 @@ Las dos librerías llaman directamente a CedroDB Rust. No ejecutan un servidor, 
 
 ## Distribuciones 0.5.0
 
-Python está publicado en [PyPI como `cedrodb==0.5.0`](https://pypi.org/project/cedrodb/0.5.0/). La publicación npm 0.5.0 espera la verificación de cuenta; mientras tanto, instala el mismo paquete probado desde la descarga de la release:
+Las librerías están disponibles en [npm como `cedrodb@0.5.0`](https://www.npmjs.com/package/cedrodb/v/0.5.0) y en [PyPI como `cedrodb==0.5.0`](https://pypi.org/project/cedrodb/0.5.0/):
 
 ```sh
-npm install https://www.ltavarez.me/downloads/cedrodb-0.5.0.tgz
+npm install cedrodb@0.5.0
 python -m pip install cedrodb==0.5.0
 ```
-
-Tras verificar su publicación en npm, el comando por nombre será `npm install cedrodb@0.5.0`.
 
 El paquete npm contiene fuentes Rust y carga un binario compatible incluido cuando está disponible. Si no lo hay, compila al instalar: se necesitan Rust 1.88+, Cargo y un enlazador C de la plataforma. El sdist de Python necesita Rust 1.85+; un wheel compatible permite instalar sin compilar. Consulta los binarios y checksums de la release antes de elegir plataforma. Los binarios GNU/Linux generados en Ubuntu 22.04 requieren un entorno de glibc compatible; no se anuncian como binarios musl.
 
