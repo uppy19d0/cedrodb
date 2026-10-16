@@ -111,6 +111,46 @@ function normalizeQuery(input = {}) {
   });
 }
 
+function normalizeSearch(input) {
+  object(input, 'search', ['text', 'vector', 'vectorField', 'textFields', 'filters', 'limit', 'maxScanned', 'minVectorScore']);
+  const text = own(input, 'text') ? boundedString(input.text, 'search.text', 4096) : null;
+  let vector = null;
+  if (own(input, 'vector')) {
+    if (!Array.isArray(input.vector) || input.vector.length === 0) throw new TypeError('search.vector must be a nonempty array of numbers');
+    if (input.vector.length > 4096) throw new RangeError('search.vector supports at most 4096 dimensions');
+    validateJSON(input.vector);
+    for (const value of input.vector) {
+      if (typeof value !== 'number') throw new TypeError('search.vector must contain only numbers');
+    }
+    vector = input.vector;
+  }
+  if (text === null && vector === null) throw new TypeError('search requires text, vector, or both');
+  const textFields = own(input, 'textFields') ? input.textFields : ['text'];
+  if (!Array.isArray(textFields)) throw new TypeError('search.textFields must be an array');
+  validateJSON(textFields);
+  const fields = Array.from(textFields, (field) => string(field, 'search.textFields entry'));
+  if (fields.length === 0 || fields.length > 8 || new Set(fields).size !== fields.length) {
+    throw new RangeError('search.textFields requires 1..8 unique fields');
+  }
+  if (own(input, 'filters') && !Array.isArray(input.filters)) throw new TypeError('search.filters must be an array');
+  const base = JSON.parse(normalizeQuery({ filters: own(input, 'filters') ? input.filters : [] }));
+  let minimum = null;
+  if (own(input, 'minVectorScore')) {
+    minimum = input.minVectorScore;
+    if (typeof minimum !== 'number' || !Number.isFinite(minimum) || minimum < -1 || minimum > 1) {
+      throw new RangeError('minVectorScore must be a finite number in -1..1');
+    }
+  }
+  return JSON.stringify({
+    text, vector,
+    vector_field: own(input, 'vectorField') ? string(input.vectorField, 'search.vectorField') : 'embedding',
+    text_fields: fields, filters: base.filters,
+    limit: integer(own(input, 'limit') ? input.limit : 10, 'search.limit', 1, 1000),
+    max_scanned: integer(own(input, 'maxScanned') ? input.maxScanned : 10000, 'search.maxScanned', 1, 100000),
+    min_vector_score: minimum,
+  });
+}
+
 function normalizeOperation(operation) {
   object(operation, 'batch operation', ['kind', 'collection', 'key', 'value']);
   const collection = string(operation.collection, 'operation.collection');
@@ -185,6 +225,22 @@ function jobRecord(job) {
   };
 }
 
+function agentNamespace(namespace) {
+  if (typeof namespace !== 'string' || !/^[A-Za-z0-9_.-]{1,128}$/.test(namespace)) {
+    throw new TypeError('Agent namespace must contain 1..128 ASCII letters, digits, underscores, dots or hyphens');
+  }
+  return namespace;
+}
+
+function agentRecord(checkpoint) {
+  if (checkpoint == null) return undefined;
+  return {
+    schemaVersion: checkpoint.schema_version, threadId: checkpoint.thread_id,
+    revision: checkpoint.revision, status: checkpoint.status, state: checkpoint.state,
+    metadata: checkpoint.metadata, updatedAt: checkpoint.updated_at,
+  };
+}
+
 class Database {
   #native;
 
@@ -202,6 +258,8 @@ class Database {
   collection(name) { return new Collection(this, string(name, 'collection name')); }
 
   queue(name) { return new Queue(this, queueName(name)); }
+
+  agent(namespace) { return new AgentStore(this, agentNamespace(namespace)); }
 
   close() { this.#native.close(); }
 
@@ -247,6 +305,19 @@ class Database {
   backup(path) { return integrityReport(this.#native.backup(string(path, 'backup path'))); }
 
   _queue(request) { return JSON.parse(this.#native.queueJson(JSON.stringify(request))); }
+
+  _agent(request) { return JSON.parse(this.#native.agentJson(JSON.stringify(request))); }
+
+  _search(collection, query) {
+    const page = JSON.parse(this.#native.searchJson(collection, normalizeSearch(query)));
+    return {
+      hits: page.hits.map((hit) => ({
+        key: hit.key, value: hit.value, score: hit.score,
+        vectorScore: hit.vector_score, textScore: hit.text_score,
+      })),
+      scanned: page.scanned, matched: page.matched, usedIndex: page.used_index ?? undefined, mode: page.mode,
+    };
+  }
 
   _get(collection, key) {
     const raw = this.#native.get(collection, string(key, 'key'));
@@ -295,9 +366,59 @@ class Collection {
 
   find(query = {}) { return this.findPage(query).records; }
   findPage(query = {}) { return this.#database._findPage(this.#name, query); }
+  search(query) { return this.#database._search(this.#name, query); }
   createIndex(field) { this.#database._createIndex(this.#name, field); }
   compareExchange(key, expected, replacement) { return this.#database._compareExchange(this.#name, key, expected, replacement); }
   aggregate(field) { return this.#database._aggregate(this.#name, field); }
+}
+
+class AgentStore {
+  #database;
+  #namespace;
+
+  constructor(database, namespace) {
+    if (!(database instanceof Database)) throw new TypeError('AgentStore requires a Database');
+    this.#database = database;
+    this.#namespace = agentNamespace(namespace);
+  }
+
+  get namespace() { return this.#namespace; }
+
+  get(threadId) {
+    return agentRecord(this.#database._agent({
+      action: 'get', namespace: this.#namespace, thread_id: boundedString(threadId, 'threadId', 4096),
+    }));
+  }
+
+  checkpoint(threadId, state, options = {}) {
+    boundedString(threadId, 'threadId', 4096);
+    validateJSON(state);
+    object(options, 'checkpoint options', ['expectedRevision', 'nowMs', 'status', 'metadata', 'operations']);
+    const expected = options.expectedRevision === undefined || options.expectedRevision === null
+      ? null : integer(options.expectedRevision, 'expectedRevision', 1);
+    const status = own(options, 'status') ? options.status : 'running';
+    if (!['running', 'waiting', 'completed'].includes(status)) throw new TypeError('Unsupported agent checkpoint status');
+    const metadata = own(options, 'metadata') ? options.metadata : {};
+    object(metadata, 'checkpoint metadata');
+    validateJSON(metadata);
+    const operations = own(options, 'operations') ? options.operations : [];
+    if (!Array.isArray(operations)) throw new TypeError('checkpoint operations must be an array');
+    const normalized = Array.from(operations, normalizeOperation);
+    for (const operation of normalized) {
+      if (operation.collection.startsWith('_cedro.agents.') || operation.collection.startsWith('_cedro.jobs.')) {
+        throw new TypeError('checkpoint operations cannot modify reserved agent or queue collections');
+      }
+    }
+    const result = this.#database._agent({
+      action: 'checkpoint', namespace: this.#namespace, thread_id: threadId, state,
+      expected_revision: expected, now_ms: queueInteger(options, 'nowMs', Date.now()), status, metadata,
+      operations: normalized,
+    });
+    return {
+      applied: result.applied, cursor: result.cursor,
+      checkpoint: result.checkpoint == null ? null : agentRecord(result.checkpoint),
+    };
+  }
 }
 
 class Queue {
@@ -400,4 +521,4 @@ class Queue {
   }
 }
 
-module.exports = { Database, Collection, Queue, version: '0.5.0' };
+module.exports = { Database, Collection, Queue, AgentStore, version: '0.6.0' };

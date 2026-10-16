@@ -16,6 +16,23 @@ export interface QueryPage<T extends JsonValue = JsonValue> {
   scanned: number;
   usedIndex?: string;
 }
+export interface SearchQuery {
+  text?: string;
+  vector?: number[];
+  vectorField?: string;
+  textFields?: string[];
+  filters?: Filter[];
+  limit?: number;
+  maxScanned?: number;
+  minVectorScore?: number;
+}
+export interface SearchHit<T extends JsonValue = JsonValue> {
+  key: string; value: T; score: number; vectorScore: number | null; textScore: number | null;
+}
+export interface SearchPage<T extends JsonValue = JsonValue> {
+  hits: SearchHit<T>[]; scanned: number; matched: number; usedIndex?: string;
+  mode: 'text' | 'vector' | 'hybrid';
+}
 export type BatchOperation =
   | { kind: 'put'; collection: string; key: string; value: JsonValue }
   | { kind: 'delete'; collection: string; key: string };
@@ -50,6 +67,22 @@ export interface AckOptions { nowMs?: number; operations?: BatchOperation[] }
 export interface FailOptions { nowMs?: number; retryDelayMs?: number }
 export interface QueueStats { queued: number; leased: number; done: number; dead: number; ready: number; expired: number }
 export interface RecoveryResult { requeued: number; dead: number; hasMore: boolean }
+export type AgentStatus = 'running' | 'waiting' | 'completed';
+export interface AgentCheckpoint<T extends JsonValue = JsonValue> {
+  schemaVersion: 1; threadId: string; revision: number; status: AgentStatus;
+  state: T; metadata: { [key: string]: JsonValue }; updatedAt: number;
+}
+export interface CheckpointOptions {
+  /** null or omitted requires the thread to be absent. Existing threads require their current revision. */
+  expectedRevision?: number | null;
+  nowMs?: number;
+  status?: AgentStatus;
+  metadata?: { [key: string]: JsonValue };
+  operations?: BatchOperation[];
+}
+export type CheckpointResult<T extends JsonValue = JsonValue> =
+  | { applied: true; cursor: number; checkpoint: AgentCheckpoint<T> }
+  | { applied: false; cursor: number; checkpoint: AgentCheckpoint<T> | null };
 
 /** All operations are synchronous and block the calling Node.js thread. */
 export class Database {
@@ -58,6 +91,7 @@ export class Database {
   static restoreBackup(backupPath: string, destinationPath: string, options?: DatabaseOptions): IntegrityReport;
   collection<T extends JsonValue = JsonValue>(name: string): Collection<T>;
   queue<T extends JsonValue = JsonValue>(name: string): Queue<T>;
+  agent<T extends JsonValue = JsonValue>(namespace: string): AgentStore<T>;
   /** Idempotently close the native handle and release its exclusive file lock. */
   close(): void;
   /** Commit all operations together, or commit none if validation fails. */
@@ -83,6 +117,8 @@ export class Collection<T extends JsonValue = JsonValue> {
   /** Return one bounded page, default 100 / maximum 1000 records. */
   find(query?: Query): Record<T>[];
   findPage(query?: Query): QueryPage<T>;
+  /** Exact bounded cosine/BM25/hybrid retrieval. Exceeding maxScanned throws instead of truncating. */
+  search(query: SearchQuery): SearchPage<T>;
   /** Session index; recreate after reopening. Equality filters can use it. */
   createIndex(field: string): void;
   /** undefined expected means absent; undefined replacement deletes the record. */
@@ -106,4 +142,12 @@ export class Queue<T extends JsonValue = JsonValue> {
   recoverExpired(options?: { nowMs?: number; limit?: number }): RecoveryResult;
   retryDead(id: string, options?: { nowMs?: number }): boolean;
 }
-export const version: '0.5.0';
+/** Application-defined JSON state with revision checks; not a LangGraph checkpoint saver. */
+export class AgentStore<T extends JsonValue = JsonValue> {
+  constructor(database: Database, namespace: string);
+  readonly namespace: string;
+  get(threadId: string): AgentCheckpoint<T> | undefined;
+  /** Save state and optional application writes in one transaction; conflicts return current checkpoint. */
+  checkpoint(threadId: string, state: T, options?: CheckpointOptions): CheckpointResult<T>;
+}
+export const version: '0.6.0';

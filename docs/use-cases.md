@@ -29,3 +29,9 @@ Use a conditional batch to require an unchanged stock document and an absent ord
 Enqueue a stable request ID, claim it with a lease and acknowledge the current token together with the generated document and an outbox event. Restarted workers can reclaim expired attempts; retry limits move persistent failures to dead state for inspection and explicit redrive. Use a consistent clock and periodically recover expired final attempts. [Complete queue lifecycle and limits](jobs.md).
 
 Queue scans are O(n), jobs remain in RAM and there is no background service or automatic retention. External calls still need idempotency. See [the roadmap](roadmap.md) for work remaining before 1.0.
+
+## Local assistants and resumable agent state
+
+Keep application-managed conversation/checkpoint state in `db.agent(namespace)`. Save a checkpoint and ordinary result/outbox writes under an expected revision, then reopen by the same thread ID after restart. A stale continuation receives a conflict and writes nothing. Store model/version metadata on memory documents and use text, supplied embeddings or hybrid retrieval with prefilters and an explicit scan budget.
+
+See the [agent contracts](agents.md), [Node example](../bindings/node/examples/agent-memory.mjs), [Python example](../bindings/python/examples/agent_memory.py) and [ecosystem research](ai-research.md). The application owns embeddings, authenticated tool approvals, external idempotency and framework serialization. This is checkpoint storage, not automatic workflow/model resumption.

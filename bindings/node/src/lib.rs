@@ -1,6 +1,9 @@
 //! Thin N-API bridge. Persistence, queries, indexes and concurrency decisions
 //! belong to the shared CedroDB Rust engine, never to a JavaScript copy.
-use cedrodb::{ChangeOperation, Condition, Database, EnqueueOptions, Options, Query};
+use cedrodb::{
+    AgentStatus, ChangeOperation, CheckpointOptions, Condition, Database, EnqueueOptions, Options,
+    Query, SearchQuery,
+};
 use napi::{Error, Result, Status};
 use napi_derive::napi;
 use serde::Deserialize;
@@ -161,6 +164,25 @@ enum QueueRequest {
         name: String,
         id: String,
         now_ms: u64,
+    },
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum AgentRequest {
+    Get {
+        namespace: String,
+        thread_id: String,
+    },
+    Checkpoint {
+        namespace: String,
+        thread_id: String,
+        state: Value,
+        expected_revision: Option<u64>,
+        now_ms: u64,
+        status: AgentStatus,
+        metadata: Value,
+        operations: Vec<ChangeOperation>,
     },
 }
 
@@ -380,6 +402,62 @@ impl NativeDatabase {
                 .query(&collection, query)
                 .map_err(engine_error)?,
         )
+    }
+
+    #[napi]
+    pub fn search_json(&self, collection: String, query_json: String) -> Result<String> {
+        let value: Value = decode(&query_json)?;
+        validate_portable_json(&value)?;
+        let query: SearchQuery =
+            serde_json::from_value(value).map_err(|error| invalid(error.to_string()))?;
+        encode(
+            &self
+                .database()?
+                .search(&collection, query)
+                .map_err(engine_error)?,
+        )
+    }
+
+    #[napi]
+    pub fn agent_json(&self, request_json: String) -> Result<String> {
+        let value: Value = decode(&request_json)?;
+        validate_portable_json(&value)?;
+        let request: AgentRequest =
+            serde_json::from_value(value).map_err(|error| invalid(error.to_string()))?;
+        let database = self.database()?;
+        match request {
+            AgentRequest::Get {
+                namespace,
+                thread_id,
+            } => encode(
+                &database
+                    .agent_get(&namespace, &thread_id)
+                    .map_err(engine_error)?,
+            ),
+            AgentRequest::Checkpoint {
+                namespace,
+                thread_id,
+                state,
+                expected_revision,
+                now_ms,
+                status,
+                metadata,
+                operations,
+            } => {
+                let options = CheckpointOptions {
+                    expected_revision,
+                    now_ms,
+                    status,
+                    metadata,
+                    operations,
+                };
+                encode(
+                    &database
+                        .agent_checkpoint(&namespace, &thread_id, state, options)
+                        .map_err(engine_error)?,
+                )
+            }
+        }
     }
 
     #[napi]

@@ -326,7 +326,7 @@ fn external_operations(operations: &[ChangeOperation], options: Options) -> Resu
             }
             | ChangeOperation::Delete { collection, key } => (collection, key),
         };
-        validate_location(collection, key)?;
+        validate_user_location(collection, key)?;
         if collection.starts_with(QUEUE_PREFIX) {
             return Err(Error::InvalidInput(
                 "ack operations must not modify internal queue collections".into(),

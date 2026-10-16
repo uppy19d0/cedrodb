@@ -160,7 +160,7 @@ pub(crate) fn index_token(value: &Value) -> String {
     output
 }
 
-fn validate_field(field: &str) -> Result<()> {
+pub(crate) fn validate_field(field: &str) -> Result<()> {
     if field.is_empty() || field.len() > MAX_KEY_BYTES {
         return Err(Error::InvalidInput(
             "field must contain 1..=4096 UTF-8 bytes".into(),
@@ -199,7 +199,7 @@ fn numeric_order(left: &serde_json::Number, right: &serde_json::Number) -> Resul
     }
 }
 
-fn matches_filter(document: &Value, filter: &Filter) -> Result<bool> {
+pub(crate) fn matches_filter(document: &Value, filter: &Filter) -> Result<bool> {
     let candidate = field_value(document, &filter.field);
     match filter.op {
         FilterOp::Exists => Ok(candidate.is_some() == filter.value.as_bool().unwrap_or(false)),
@@ -221,6 +221,34 @@ fn matches_filter(document: &Value, filter: &Filter) -> Result<bool> {
             })
         }
     }
+}
+
+pub(crate) fn validate_filters(filters: &[Filter], options: Options) -> Result<()> {
+    if filters.len() > 64 {
+        return Err(Error::LimitExceeded(
+            "query supports at most 64 filters".into(),
+        ));
+    }
+    for filter in filters {
+        validate_field(&filter.field)?;
+        validate_document(&filter.value, options)?;
+        if filter.op == FilterOp::Exists && !filter.value.is_boolean() {
+            return Err(Error::InvalidInput(
+                "exists filter value must be a boolean".into(),
+            ));
+        }
+        if matches!(
+            filter.op,
+            FilterOp::Gt | FilterOp::Gte | FilterOp::Lt | FilterOp::Lte
+        ) && !filter.value.is_number()
+            && !filter.value.is_string()
+        {
+            return Err(Error::InvalidInput(
+                "ordered filter value must be a number or string".into(),
+            ));
+        }
+    }
+    Ok(())
 }
 
 impl Database {
@@ -262,32 +290,9 @@ impl Database {
         if !(1..=1000).contains(&query.limit) {
             return Err(Error::InvalidInput("query limit must be 1..=1000".into()));
         }
-        if query.filters.len() > 64 {
-            return Err(Error::LimitExceeded(
-                "query supports at most 64 filters".into(),
-            ));
-        }
+        validate_filters(&query.filters, self.options)?;
         if let Some(after) = &query.after {
             validate_location(collection, after)?;
-        }
-        for filter in &query.filters {
-            validate_field(&filter.field)?;
-            validate_document(&filter.value, self.options)?;
-            if filter.op == FilterOp::Exists && !filter.value.is_boolean() {
-                return Err(Error::InvalidInput(
-                    "exists filter value must be a boolean".into(),
-                ));
-            }
-            if matches!(
-                filter.op,
-                FilterOp::Gt | FilterOp::Gte | FilterOp::Lt | FilterOp::Lte
-            ) && !filter.value.is_number()
-                && !filter.value.is_string()
-            {
-                return Err(Error::InvalidInput(
-                    "ordered filter value must be a number or string".into(),
-                ));
-            }
         }
         let inner = self.lock()?;
         let mut page = QueryPage {

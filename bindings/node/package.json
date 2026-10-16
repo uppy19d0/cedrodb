@@ -1,7 +1,7 @@
 {
   "name": "cedrodb",
-  "version": "0.5.0",
-  "description": "Experimental embedded Rust database with guarded transactions, verified backups and persistent local job queues.",
+  "version": "0.6.0",
+  "description": "Native Rust storage for agent checkpoints, hybrid memory retrieval and persistent local jobs.",
   "main": "index.cjs",
   "module": "index.mjs",
   "types": "index.d.ts",
@@ -66,6 +66,11 @@
     "outbox",
     "backup",
     "changefeed",
-    "cedrodb"
+    "cedrodb",
+    "agent-memory",
+    "checkpoints",
+    "vector-search",
+    "hybrid-search",
+    "local-first"
   ]
 }

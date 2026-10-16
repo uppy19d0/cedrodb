@@ -57,6 +57,11 @@ jobs:
           python -m unittest discover -s tests -v
       - name: Verify Node and Python use the same storage
         run: python scripts/check-interoperability.py
+      - name: Verify optional PydanticAI conversation persistence without model calls
+        if: runner.os == 'Linux'
+        run: |
+          python -m pip install 'pydantic-ai-slim==2.56.0'
+          python bindings/python/examples/pydantic_ai_history.py
       - name: Build Python source distribution
         if: runner.os == 'Linux'
         working-directory: bindings/python

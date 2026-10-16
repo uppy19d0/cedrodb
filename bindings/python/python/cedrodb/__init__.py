@@ -19,7 +19,7 @@ from typing import (
 
 from ._native import CedroError, DatabaseClosedError, NativeDatabase
 
-__version__ = "0.5.0"
+__version__ = "0.6.0"
 __all__ = [
     "Database", "Collection", "Transaction", "CedroError", "DatabaseClosedError",
     "MISSING", "DELETE", "JSONValue", "Filter", "Record", "QueryPage",
@@ -27,6 +27,8 @@ __all__ = [
     "EqualsCondition", "ConditionalResult", "__version__",
     "Queue", "Job", "JobStatus", "EnqueueResult", "QueueStats", "RecoveryResult",
     "MAX_SAFE_INTEGER",
+    "AgentStore", "AgentCheckpoint", "CheckpointResult", "AgentStatus",
+    "SearchHit", "SearchPage", "SearchMode",
 ]
 
 JSONValue = Union[None, bool, int, float, str, List["JSONValue"], Dict[str, "JSONValue"]]
@@ -48,6 +50,44 @@ class QueryPage(TypedDict):
     next_after: Optional[str]
     scanned: int
     used_index: Optional[str]
+
+
+SearchMode = Literal["text", "vector", "hybrid"]
+
+
+class SearchHit(TypedDict):
+    key: str
+    value: JSONValue
+    score: float
+    vector_score: Optional[float]
+    text_score: Optional[float]
+
+
+class SearchPage(TypedDict):
+    hits: List[SearchHit]
+    scanned: int
+    matched: int
+    used_index: Optional[str]
+    mode: SearchMode
+
+
+AgentStatus = Literal["running", "waiting", "completed"]
+
+
+class AgentCheckpoint(TypedDict):
+    schema_version: int
+    thread_id: str
+    revision: int
+    status: AgentStatus
+    state: JSONValue
+    metadata: Dict[str, JSONValue]
+    updated_at: int
+
+
+class CheckpointResult(TypedDict):
+    applied: bool
+    cursor: int
+    checkpoint: Optional[AgentCheckpoint]
 
 
 class ChangeOperation(TypedDict, total=False):
@@ -271,6 +311,37 @@ def _validate_queue_payload(value: Any) -> None:
     portable(value)
 
 
+def _validate_agent_json(value: Any) -> None:
+    """Agent envelopes can be exchanged with JavaScript without numeric loss."""
+    _validate_json(value)
+
+    def portable(item: Any) -> None:
+        if isinstance(item, bool):
+            return
+        if isinstance(item, (int, float)) and abs(item) > MAX_SAFE_INTEGER:
+            raise OverflowError("agent state and metadata numbers must be within +/-MAX_SAFE_INTEGER")
+        if isinstance(item, dict):
+            for nested in item.values():
+                portable(nested)
+        elif isinstance(item, (list, tuple)):
+            for nested in item:
+                portable(nested)
+
+    portable(value)
+
+
+def _finite_number(value: Any, label: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError("{} must be a number".format(label))
+    try:
+        number = float(value)
+    except OverflowError:
+        raise ValueError("{} must be finite".format(label)) from None
+    if not math.isfinite(number):
+        raise ValueError("{} must be finite".format(label))
+    return number
+
+
 class Database:
     """Exclusively open a database directory, creating it if necessary.
 
@@ -323,6 +394,11 @@ class Database:
         """Access a durable local job queue. Use an application-managed worker loop."""
         self._check_open()
         return Queue(self, _queue_name(name))
+
+    def agent(self, namespace: str) -> AgentStore:
+        """Access revision-fenced JSON checkpoints in an application namespace."""
+        self._check_open()
+        return AgentStore(self, namespace)
 
     def batch(self, operations: Iterable[Mapping]) -> None:
         """Commit put/delete operations together, or leave all records unchanged.
@@ -413,6 +489,67 @@ class Database:
             _positive_integer(max_state_bytes, "max_state_bytes"),
         )
         return json.loads(NativeDatabase.restore_backup_json(backup, destination, *options))
+
+
+class AgentStore:
+    """Durable JSON state with optimistic revision checks and atomic business writes.
+
+    This is a framework-neutral store, not a LangGraph checkpointer. Namespaces
+    organize records; the application remains responsible for authorization.
+    """
+
+    def __init__(self, database: Database, namespace: str) -> None:
+        self._database = database
+        self.namespace = _string(namespace, "agent namespace")
+        if re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", self.namespace) is None:
+            raise ValueError("agent namespace must contain 1..128 ASCII letters, digits, _, . or -")
+
+    def _request(self, action: str, thread_id: str, **arguments: Any) -> Any:
+        self._database._check_open()
+        request = {
+            "action": action, "namespace": self.namespace,
+            "thread_id": _queue_text(thread_id, "thread_id", 4096), **arguments,
+        }
+        return json.loads(self._database._native.agent_json(_dumps(request)))
+
+    def get(self, thread_id: str) -> Optional[AgentCheckpoint]:
+        """Return the latest committed checkpoint, or None if the thread is absent."""
+        return self._request("get", thread_id)
+
+    def checkpoint(
+        self,
+        thread_id: str,
+        state: JSONValue,
+        *,
+        expected_revision: Optional[int] = None,
+        now_ms: Optional[int] = None,
+        status: AgentStatus = "running",
+        metadata: Optional[Dict[str, JSONValue]] = None,
+        operations: Optional[Iterable[Mapping]] = None,
+    ) -> CheckpointResult:
+        """Commit state plus put/delete operations if the expected revision matches.
+
+        expected_revision=None means the thread MUST be absent, not an
+        unconditional update. On conflict no writes occur and checkpoint holds
+        the current value. A success uses the durable transaction cursor as its
+        revision. External effects still require application-level idempotency.
+        """
+        self._database._check_open()
+        if expected_revision is not None:
+            _queue_integer(expected_revision, "expected_revision", 1)
+        _string(status, "status")
+        if status not in ("running", "waiting", "completed"):
+            raise ValueError("status must be running, waiting or completed")
+        actual_metadata = {} if metadata is None else metadata
+        if not isinstance(actual_metadata, dict):
+            raise TypeError("metadata must be a JSON object")
+        _validate_agent_json(state)
+        _validate_agent_json(actual_metadata)
+        return self._request(
+            "checkpoint", thread_id, state=state, expected_revision=expected_revision,
+            now_ms=_queue_now(now_ms), status=status, metadata=actual_metadata,
+            operations=[] if operations is None else list(operations),
+        )
 
 
 class Queue:
@@ -606,6 +743,50 @@ class Collection:
     ) -> List[Record]:
         """Return one page of {key, value} records. Use find_page for continuation."""
         return self.find_page(filters, limit=limit, after=after)["records"]
+
+    def search(
+        self,
+        *,
+        text: Optional[str] = None,
+        vector: Optional[Iterable[float]] = None,
+        vector_field: str = "embedding",
+        text_fields: Optional[Iterable[str]] = None,
+        filters: Optional[Iterable[Filter]] = None,
+        limit: int = 10,
+        max_scanned: int = 10_000,
+        min_vector_score: Optional[float] = None,
+    ) -> SearchPage:
+        """Rank prefiltered documents by BM25, exact cosine, or hybrid RRF.
+
+        Supply your own embeddings; no model, network call or ANN index is
+        included. Exceeding max_scanned raises instead of returning partial
+        rankings. Index definitions remain local to this open handle.
+        """
+        self._database._check_open()
+        if text is not None:
+            _string(text, "text")
+        if vector is None:
+            coordinates = None
+        else:
+            if isinstance(vector, (str, bytes, Mapping)):
+                raise TypeError("vector must be an iterable of numbers")
+            coordinates = [_finite_number(item, "vector coordinate") for item in vector]
+        if isinstance(text_fields, (str, bytes, Mapping)):
+            raise TypeError("text_fields must be an iterable of field strings")
+        fields = ["text"] if text_fields is None else [
+            _string(field, "text field") for field in text_fields
+        ]
+        request = {
+            "text": text, "vector": coordinates,
+            "vector_field": _string(vector_field, "vector_field"), "text_fields": fields,
+            "filters": [] if filters is None else list(filters),
+            "limit": _queue_integer(limit, "limit", 1, 1000),
+            "max_scanned": _queue_integer(max_scanned, "max_scanned", 1, 100_000),
+            "min_vector_score": None if min_vector_score is None else _finite_number(
+                min_vector_score, "min_vector_score"
+            ),
+        }
+        return json.loads(self._database._native.search_json(self.name, _dumps(request)))
 
     def iter_records(
         self, filters: Optional[Iterable[Filter]] = None, *, page_size: int = 100

@@ -17,15 +17,19 @@ use std::path::Path;
 use std::sync::{Mutex, MutexGuard};
 
 mod advanced;
+mod agent;
 mod conditional;
 mod maintenance;
 mod query;
 mod queue;
+mod search;
 pub use advanced::{ChangeOperation, ChangePage, ChangeTransaction, Stats};
+pub use agent::{AgentCheckpoint, AgentStatus, CheckpointOptions, CheckpointResult};
 pub use conditional::{Condition, ConditionalResult};
 pub use maintenance::IntegrityReport;
 pub use query::{Filter, FilterOp, Query, QueryPage, Record};
 pub use queue::{EnqueueOptions, EnqueueResult, Job, JobStatus, QueueStats, RecoveryResult};
+pub use search::{SearchHit, SearchMode, SearchPage, SearchQuery};
 
 const HEADER: &[u8; 16] = b"CEDRODB\0\x01\0\0\0\0\0\0\0";
 const FRAME_HEADER_BYTES: usize = 12;
@@ -475,13 +479,18 @@ fn validate_location(collection: &str, key: &str) -> Result<()> {
     Ok(())
 }
 
-/// Public mutation APIs reserve queue storage while log replay and queue methods
+/// Public mutation APIs reserve internal storage while log replay and typed methods
 /// retain access through validate_location and the shared internal commit path.
 fn validate_user_location(collection: &str, key: &str) -> Result<()> {
     validate_location(collection, key)?;
     if collection.starts_with(queue::QUEUE_PREFIX) {
         return Err(Error::InvalidInput(
             "collections beginning with _cedro.jobs. are reserved for queue APIs".into(),
+        ));
+    }
+    if collection.starts_with(agent::AGENT_PREFIX) {
+        return Err(Error::InvalidInput(
+            "collections beginning with _cedro.agents. are reserved for agent APIs".into(),
         ));
     }
     Ok(())

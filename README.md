@@ -1,17 +1,18 @@
 # CedroDB
 
-**Embedded JSON storage for applications that resume local work after a restart.**
+**Local storage for agent checkpoints, searchable memory and recoverable work.**
 
-CedroDB is a Rust engine with native Node.js/TypeScript and Python libraries. Documents, atomic batches and a durable transaction changefeed share one storage format. Save a document and its outbox event together, process complete transactions, and resume from a saved cursor.
+CedroDB is a Rust engine with native Node.js/TypeScript and Python libraries. Save an agent checkpoint and its document/outbox writes in one transaction, reject stale checkpoint revisions, and retrieve local memory using text, supplied embeddings or both. Documents, jobs, backups and a durable changefeed share one storage format.
 
-**0.5.0 is experimental.** We are approaching 1.0 through incremental, tested releases. The engine is not production validated; there are no superiority claims against SQLite, MDBX, UnQLite or DuckDB.
+**0.6.0 is experimental.** We are approaching 1.0 through incremental, tested releases. The engine is not production validated; there are no superiority claims against SQLite, MDBX, UnQLite or DuckDB.
 
-[Node API](bindings/node/README.md) · [Python API](bindings/python/README.md) · [Backups](docs/backups.md) · [Recipes](docs/use-cases.md) · [Local jobs](docs/jobs.md) · [Changelog](CHANGELOG.md) · [Road to 1.0](docs/roadmap.md) · [Live examples](https://www.ltavarez.me/labs/cedrodb)
+[Agents and retrieval](docs/agents.md) · [Research](docs/ai-research.md) · [Node API](bindings/node/README.md) · [Python API](bindings/python/README.md) · [Backups](docs/backups.md) · [Recipes](docs/use-cases.md) · [Local jobs](docs/jobs.md) · [Changelog](CHANGELOG.md) · [Road to 1.0](docs/roadmap.md) · [Live examples](https://www.ltavarez.me/labs/cedrodb)
 
 ## Application fit
 
 | Application | CedroDB provides | The application still owns |
 | --- | --- | --- |
+| Local assistants and agent tools | Revision-fenced checkpoints, atomic state/results/outbox writes, text/vector/hybrid retrieval | Models, embeddings, tool authorization, context selection and execution orchestration |
 | Offline forms and desktop tools | JSON documents, consistent backup files and checked restoration | Validation, encryption, off-device copies and conflict resolution |
 | Local integrations | A document and outbox event in one atomic batch; durable resume cursors | Delivery, checkpoints and destination deduplication |
 | Background reports and deferred imports | Persistent jobs, leased ownership, retries and atomic result writes | Worker lifecycle, capacity, recovery scheduling and external idempotency |
@@ -22,16 +23,16 @@ One open handle owns a database directory. Operations within it serialize throug
 
 ## Install
 
-Install Node.js from [npm](https://www.npmjs.com/package/cedrodb/v/0.5.0):
+After verifying registry publication, install Node.js from [npm](https://www.npmjs.com/package/cedrodb/v/0.6.0):
 
 ```sh
-npm install cedrodb@0.5.0
+npm install cedrodb@0.6.0
 ```
 
-Install Python from [PyPI](https://pypi.org/project/cedrodb/0.5.0/). Pip selects a compatible wheel when available; direct release downloads remain available from [the platform selector](https://www.ltavarez.me/labs/cedrodb).
+After verifying publication, install Python from [PyPI](https://pypi.org/project/cedrodb/0.6.0/). Pip selects a compatible wheel when available; direct release downloads remain available from [the platform selector](https://www.ltavarez.me/labs/cedrodb).
 
 ```sh
-python -m pip install cedrodb==0.5.0
+python -m pip install cedrodb==0.6.0
 ```
 
 Python supports 3.9+; its source distribution needs Rust 1.85+ and a platform linker. Node supports 18+, includes binaries for macOS ARM64/x64, Linux x64 with compatible glibc and Windows x64, and needs Rust 1.88+ for its source fallback. [Distribution details](docs/native-libraries.md).
@@ -79,7 +80,38 @@ with Database('./restored.cedro') as restored:
 
 Backups preserve the complete log and transaction cursors. The versioned container checks its expected length and CRC32; restoration validates it before creating a new destination. CRC32 detects accidental corruption, not malicious modification. Backup and verification hold the engine mutex. [Recovery procedures and limits](docs/backups.md).
 
-## Features in 0.5
+## Search memory and save agent progress
+
+```python
+from cedrodb import Database
+
+with Database('./assistant.cedro') as db:
+    memory = db.collection('support-memory')
+    memory.put('refund-policy', {
+        'text': 'Refunds are available within 30 days.',
+        'embedding': [1.0, 0.0],  # Synthetic demo; supply real embeddings.
+        'model': 'demo-v1', 'tenant': 'shop-1',
+    })
+    page = memory.search(
+        text='refund', vector=[1.0, 0.0],
+        filters=[{'field': 'tenant', 'op': 'eq', 'value': 'shop-1'},
+                 {'field': 'model', 'op': 'eq', 'value': 'demo-v1'}],
+    )
+    agents = db.agent('support')
+    previous = agents.get('conversation:42')
+    saved = agents.checkpoint(
+        'conversation:42', {'memory_keys': [hit['key'] for hit in page['hits']]},
+        expected_revision=previous['revision'] if previous else None,
+        operations=[{'kind': 'put', 'collection': 'outbox',
+                     'key': 'conversation:42:answer',
+                     'value': {'type': 'answer.ready'}}],
+    )
+    assert saved['applied']
+```
+
+A stale revision changes neither the checkpoint nor its outbox writes. Text search uses BM25, vector search uses exact cosine similarity, and hybrid search combines both rankings using reciprocal rank fusion. Filters run before scoring; equality indexes can narrow the scan. Exceeding the scan budget returns an error rather than a partial top-k. Your application supplies embeddings; CedroDB makes no model or network calls. [Full contracts and boundaries](docs/agents.md).
+
+## Features in 0.6
 
 - JSON documents, explicit collection/key names and atomic cross-collection batches.
 - Versioned append-only frames with length checks, CRC32 and `sync_all` before changes become visible.
@@ -90,6 +122,9 @@ Backups preserve the complete log and transaction cursors. The versioned contain
 - Durable changefeed with complete transactions and bounded encoded pages.
 - Read-only integrity checks, consistent full-history backup files and validated restoration without overwriting existing destinations.
 - Persistent [local job queues](docs/jobs.md): priorities, scheduling, leases, retry limits, stale-worker fencing and atomic result acknowledgements.
+- Scoped agent checkpoints with revision checks and atomic document/outbox operations.
+- Text/BM25, exact vector/cosine and hybrid/RRF retrieval with metadata prefilters, deterministic ties and explicit scan budgets.
+- Exact floating-point parsing across replay, backups and SDK JSON boundaries.
 - Native SDKs, TypeScript ESM/CommonJS types, Python type hints and shared Node/Python storage.
 
 Indexes are session-local: recreate them after opening. Separate calls/pages do not share a snapshot. APIs are synchronous; use a worker for disk-heavy work when the application's main thread must stay responsive.
@@ -109,7 +144,7 @@ These are not RSS limits: maps, indexes, decoded JSON, result copies and tempora
 
 JavaScript rejects unsafe integers instead of rounding Rust/Python data. Python supports integers in [-2^63, 2^64−1]. Structural equality treats exactly equivalent integer/float values within ±2^53 alike, with booleans distinct. Aggregates use `f64` and can lose integer precision above 2^53; use an appropriate exact representation for accounting.
 
-The 0.5 log remains compatible with 0.2. Backup containers are separate. See [architecture](docs/architecture.md), [migration notes](docs/migrations.md) and [benchmark protocol](docs/benchmarks.md).
+The 0.6 log remains compatible with 0.2. Backup containers are separate. See [architecture](docs/architecture.md), [migration notes](docs/migrations.md) and [benchmark protocol](docs/benchmarks.md).
 
 SQL, MVCC, replication, encryption, multi-process database access and a C ABI are not implemented. Durability depends on OS/filesystem/device synchronization. A commit I/O failure poisons the handle: close/reopen to resolve the uncertain outcome before retrying. Process-kill tests do not certify physical power-loss behavior.
 

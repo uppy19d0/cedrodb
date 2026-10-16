@@ -21,3 +21,20 @@ Queue payloads use the shared JavaScript-safe numeric range in all runtimes; ord
 ## Pre-1.0 policy
 
 Incompatible format/API changes must have release and migration notes. A stable backward/forward compatibility contract is a gate for 1.0, not a guarantee already established by the project.
+## 0.5 to 0.6
+
+The log/backup formats remain unchanged. Generic mutation APIs, including queue
+ACK writes, now reserve `_cedro.agents.*` for typed checkpoint storage. If your
+older application used that prefix for ordinary data, move it with 0.5 before
+upgrading; existing records are not silently rewritten. Revisions are global
+durable cursors, not per-thread counters. Agent statuses remain application data.
+
+Floating-point parsing now preserves exact f64 round trips during replay. This
+fixes possible one-ULP changes after reopening in earlier versions and keeps
+vector-threshold decisions stable for the same stored values. Existing log
+bytes do not require conversion. Numeric model/version compatibility still
+belongs to the application.
+
+Search is read-only and uses existing ordinary collections; no persistent search
+index or embedding model is created. Recreate equality indexes after reopening.
+See [agent/search contracts](agents.md) before choosing budgets and data scope.

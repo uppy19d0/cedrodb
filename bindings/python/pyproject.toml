@@ -4,13 +4,13 @@ build-backend = "maturin"
 
 [project]
 name = "cedrodb"
-version = "0.5.0"
-description = "Experimental embedded Rust database with guarded transactions, verified backups and persistent local job queues"
+version = "0.6.0"
+description = "Native Rust storage for agent checkpoints, hybrid memory retrieval and persistent local jobs"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Luis Tavarez" }]
-keywords = ["database", "embedded", "document", "outbox", "changefeed", "rust", "job-queue", "offline", "backup"]
+keywords = ["embedded", "database", "rust", "agent-memory", "checkpoints", "vector-search", "hybrid-search", "local-first"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Programming Language :: Python :: 3",

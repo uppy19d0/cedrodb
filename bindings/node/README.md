@@ -2,14 +2,14 @@
 
 A small embedded document database powered by the CedroDB Rust engine through N-API. Store JSON locally, commit related changes together, query indexed fields, and replay durable transactions without running a database server.
 
-**Experimental 0.5 release.** CedroDB keeps active documents in memory and persists a checksummed transaction log. Capabilities include durable local job queues, guarded transactions across collections, strict log verification and verified backups that preserve transaction history and change cursors. It is intended for evaluation, local tools and applications whose storage limits fit the documented memory model.
+**Experimental 0.6 release.** CedroDB keeps active documents in memory and persists a checksummed transaction log. Capabilities include exact local text/vector retrieval, revision-protected agent checkpoints, durable local job queues, guarded transactions and verified backups. It is intended for evaluation, local tools and applications whose storage limits fit the documented memory model.
 
 [Project](https://github.com/uppy19d0/cedrodb) · [Architecture](https://github.com/uppy19d0/cedrodb/blob/main/docs/architecture.md) · [Backup and recovery](https://github.com/uppy19d0/cedrodb/blob/main/docs/backups.md) · [Python API](https://github.com/uppy19d0/cedrodb/tree/main/bindings/python) · [Interactive demo](https://www.ltavarez.me/labs/cedrodb)
 
 ## Install
 
 ```sh
-npm install cedrodb@0.5.0
+npm install cedrodb@0.6.0
 ```
 
 Requires **Node.js 18 or newer**. ESM, CommonJS and TypeScript are supported; the package has no npm runtime dependencies.
@@ -63,8 +63,100 @@ try {
 | Offline desktop or field application | JSON collections, equality indexes, verified backups | UI, synchronization protocol and conflict policy |
 | Local outbox or audit trail | Atomic batches and durable change cursors | Delivery, checkpoints and deduplication of external effects |
 | Local workers and automation | Durable jobs, leases, retries and atomic acknowledgment with results | Run the worker loop, provide a suitable clock and make external effects idempotent |
+| Local AI assistants and retrieval tools | Exact search, revision-protected checkpoints and atomic checkpoint/result writes | Generate embeddings, select the model/tenant, validate messages and control execution |
 | Device state and worker checkpoints | Compare-and-exchange, persisted history | Scheduling, retries and business rules |
 | Node.js and Python utilities sharing local data | The same Rust engine and on-disk format | Open the directory sequentially; use portable JSON numbers |
+
+## Local retrieval and agent checkpoints
+
+Use `Collection.search()` to retrieve local documents, then `AgentStore.checkpoint()` to save application-defined agent state and its related results/outbox writes in one transaction. The engine does not call an embedding model, execute tools or run a workflow framework.
+
+### Exact text, vector and hybrid retrieval
+
+```js
+const knowledge = db.collection('knowledge');
+knowledge.putMany([
+  { key: 'backups', value: { tenant: 'alice', model: 'synthetic-2d', text: 'Backups preserve transaction history.', embedding: [1, 0] } },
+  { key: 'jobs', value: { tenant: 'alice', model: 'synthetic-2d', text: 'Jobs use leases and retries.', embedding: [0.2, 0.9] } },
+]);
+knowledge.createIndex('model');
+
+const found = knowledge.search({
+  text: 'backups history',
+  vector: [1, 0],
+  vectorField: 'embedding',
+  textFields: ['text'],
+  filters: [
+    { field: 'tenant', op: 'eq', value: 'alice' },
+    { field: 'model', op: 'eq', value: 'synthetic-2d' },
+  ],
+  limit: 5,
+  maxScanned: 1000,
+});
+console.log(found.hits, found.mode, found.scanned, found.usedIndex);
+```
+
+The vectors above are synthetic API examples, not useful model embeddings or benchmarks. Applications generate embeddings separately and should store the model/version with each document. Filter by model and tenant before retrieval; equal dimensions do not make embeddings from different models compatible. Filters select data and do not provide authentication or authorization.
+
+`search({ text })` uses BM25 with `k1 = 1.2` and `b = 0.75`. Text is split on non-alphanumeric Unicode characters and lowercased; there is no stemming, accent folding, language detection or typo tolerance. Corpus statistics are calculated over the filtered documents with nonempty text in the selected fields. Fields can be top-level names or RFC 6901 JSON Pointers.
+
+`search({ vector })` uses exact cosine similarity, including non-unit vectors. Query vectors must have 1–4096 finite numeric components and nonzero magnitude. A filtered document with no vector field is skipped by that channel; a present malformed, zero or dimension-mismatched vector produces an error. Metadata filters run before document vector validation, so unrelated models can be excluded explicitly. `minVectorScore` accepts a cosine threshold from -1 to 1 and requires a vector query.
+
+Providing both `text` and `vector` uses reciprocal rank fusion: each channel contributes `1 / (60 + rank)` with ranks starting at one. The engine ranks each complete channel before applying `limit`. Text matches and vector matches form a union; `minVectorScore` filters the vector channel, so a document can still appear through its text score. Final ties are ordered by document key. BM25, cosine and fused scores have different meanings and should not be compared across modes.
+
+The result is `{ hits, scanned, matched, usedIndex?, mode }`. Each hit contains `{ key, value, score, vectorScore, textScore }`, with null when a channel has no computed score. A computed nonmatching text score can be zero when the vector channel supplies the hit. `matched` counts documents matching at least one channel before the result limit. `mode` is `text`, `vector` or `hybrid`.
+
+| Search option | Default / limit |
+| --- | --- |
+| `text` | Optional; 1–4096 UTF-8 bytes and 1–64 distinct alphanumeric query terms |
+| `vector` | Optional number array; 1–4096 dimensions |
+| `vectorField` | `embedding` |
+| `textFields` | `['text']`; 1–8 unique field names / JSON Pointers |
+| `filters` | `[]`; same AND predicates as `find()` |
+| `limit` | 10; allowed 1–1000 |
+| `maxScanned` | 10000; allowed 1–100000 |
+| `minVectorScore` | Omitted; otherwise a finite number in -1..1 |
+
+At least one retrieval channel is required. `maxScanned` counts candidates visited **before** metadata filtering. The narrowest available equality index can reduce that candidate set. Exceeding the budget throws instead of returning a silently truncated top-k. Search is an exact synchronous scan/ranking operation over committed state, with additional result/working memory. It has no approximate vector index, persistent full-text index or automatic embedding provider; use it for bounded local workloads.
+
+### Revision-protected agent state
+
+```js
+const agents = db.agent('support');
+const created = agents.checkpoint('alice:thread:42', {
+  messages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: 'Explain backups' }] }],
+  step: 'retrieve',
+}, { nowMs: 1000 });
+
+if (created.applied) {
+  const saved = agents.checkpoint('alice:thread:42', {
+    step: 'review',
+    retrievedKeys: found.hits.map(hit => hit.key),
+  }, {
+    expectedRevision: created.checkpoint.revision,
+    nowMs: 1001,
+    status: 'waiting',
+    metadata: { approvalRequired: true },
+    operations: [
+      { kind: 'put', collection: 'tool_results', key: 'retrieval:42', value: { keys: found.hits.map(hit => hit.key) } },
+      { kind: 'put', collection: 'outbox', key: 'review:42', value: { type: 'agent.review_requested' } },
+    ],
+  });
+  console.log(saved.applied, saved.checkpoint);
+}
+```
+
+`db.agent(namespace)` returns an `AgentStore` using the same native database handle. `get(threadId)` returns the latest `AgentCheckpoint` or `undefined`. Checkpoints contain `schemaVersion`, `threadId`, `revision`, `status`, `state`, `metadata` and `updatedAt`. State is any supported JSON value; metadata must be a JSON object. Both use portable safe-range numbers across Node, Python and Rust. Namespace names use 1–128 ASCII letters, digits, underscores, dots or hyphens; thread IDs use 1–4096 UTF-8 bytes without NUL.
+
+`checkpoint(threadId, state, options?)` returns `{ applied, cursor, checkpoint }`. **An omitted, undefined or null `expectedRevision` requires the thread to be absent.** It never means an unconditional update. To update an existing thread, pass the positive revision returned by `get()` or a successful checkpoint. Revisions are opaque durable transaction cursors and can skip numbers when unrelated commits occur; do not calculate the next revision yourself.
+
+The engine checks the revision and commits the checkpoint and optional ordinary put/delete operations under one lock. A stale continuation changes nothing and returns `applied: false` with the actual checkpoint, or null when the thread is absent. Validation errors throw even when the revision would conflict. All ordinary document, state and frame limits apply to the combined checkpoint envelope and operations. Leave headroom for metadata and results; failures commit none of the transaction.
+
+Options default to `expectedRevision: null`, `nowMs: Date.now()`, `status: 'running'`, `metadata: {}` and `operations: []`. Status accepts `running`, `waiting` or `completed` and is application-managed data: it does not authorize a tool, enforce an approval or resume execution. The latest checkpoint survives reopening and verified backup restoration. Older log history remains retained, but this API exposes the current checkpoint rather than a historical branching workflow.
+
+The `_cedro.agents.<namespace>` collection is reserved. Direct generic mutations and application writes from checkpoint/queue completion operations cannot target reserved agent or queue collections. Namespaces separate records; applications still own access control, message/tool schema validation, execution and external-effect idempotency. Revision checks prevent stale local state updates, not duplicate external tool calls.
+
+This is a CedroDB JSON checkpoint API, **not an implementation of LangGraph's checkpoint saver/store contracts**. Applications using AI SDK should preserve their full UI message representation and validate restored messages against their current tool and metadata schemas. See [AI SDK persistence guidance](https://ai-sdk.dev/docs/ai-sdk-ui/chatbot-message-persistence) and the complete runnable [agent-memory.mjs example](https://github.com/uppy19d0/cedrodb/blob/main/bindings/node/examples/agent-memory.mjs). The example makes no model calls and uses clearly labeled synthetic embeddings.
 
 ## Durable local jobs
 
@@ -244,6 +336,7 @@ Verification and backup hold the database lock and replay documents into additio
 | `new Database(path, options?)` | Open or create a database directory |
 | `db.collection(name)` | Obtain a collection handle |
 | `db.queue(name)` | Obtain a durable local queue handle |
+| `db.agent(namespace)` | Obtain a revision-protected JSON agent state handle |
 | `collection.put(key, value)` / `delete(key)` | Commit one mutation |
 | `collection.get(key)` | JSON value, or `undefined` when absent |
 | `collection.putMany([{ key, value }, ...])` | Commit one atomic batch |
@@ -251,6 +344,7 @@ Verification and backup hold the database lock and replay documents into additio
 | `db.conditionalBatch({ conditions, operations })` | `{ applied, failedCondition, cursor }`; commit only if every guard matches |
 | `collection.find(query?)` | One bounded array of `{ key, value }` records |
 | `collection.findPage(query?)` | `{ records, nextAfter?, scanned, usedIndex? }` |
+| `collection.search(query)` | Exact text/vector/hybrid `SearchPage` |
 | `collection.createIndex(field)` | Build an equality index for this session |
 | `collection.compareExchange(key, expected, replacement)` | Boolean conditional update result |
 | `collection.aggregate(field)` | `{ count, sum, min, max }` over a top-level numeric field |
@@ -258,9 +352,11 @@ Verification and backup hold the database lock and replay documents into additio
 | `db.stats()` | Version, records, collections, contentBytes, logBytes, latestCursor, indexes |
 | `db.verify()` / `db.backup(path)` | `IntegrityReport` |
 | `Database.restoreBackup(file, newDirectory, options?)` | `IntegrityReport` |
+| `agent.get(threadId)` | Latest `AgentCheckpoint` or `undefined` |
+| `agent.checkpoint(threadId, state, options?)` | `{ applied, cursor, checkpoint }`; checkpoint and application writes commit together |
 | `db.close()` | Release the native handle and exclusive file lock; idempotent |
 
-Complete TypeScript declarations are included for both ESM and CommonJS, including typed `Queue`, `Job` and `LeasedJob` exports. Calls on retained collections and queues fail after their database closes.
+Complete TypeScript declarations are included for both ESM and CommonJS, including typed `Queue`, `Job`, `LeasedJob`, `AgentStore`, `AgentCheckpoint` and `SearchPage` exports. Calls on retained collections, queues and agent stores fail after their database closes.
 
 ## Python interoperability and JSON rules
 
@@ -277,15 +373,15 @@ Only plain JSON objects, dense standard arrays, strings, booleans, null and fini
 
 Structural equality ignores object property order. Exactly representable integral floats equal integers within the core's safe numeric range, including inside nested values; Python `1.0` can match JavaScript `1`. Booleans remain distinct from numbers. Decimal calculations retain normal IEEE 754 limitations. `aggregate()` uses floating-point arithmetic and supports a top-level field, not a nested JSON Pointer.
 
-## Limits and migration from 0.2 / 0.3 / 0.4
+## Limits and migration from 0.2 / 0.3 / 0.4 / 0.5
 
 The default limits are 1 MiB per document, 16 MiB per transaction frame and 64 MiB of encoded live content. Override them with `maxDocumentBytes`, `maxFrameBytes` and `maxStateBytes`. These are encoded-content limits, not a cap on total process RAM: all active documents, indexes, transaction offsets, results and verification replay consume memory. JSON nesting is limited to 64 levels.
 
 The append-only log has no compaction or retention yet. SQL, MVCC, automatic replication, encryption and concurrent multi-process ownership of a directory are not implemented. Do not edit, replace or remove an open database's log. There are no comparative benchmark claims against SQLite, MDBX or DuckDB.
 
-Version 0.3 added `verify()`, `backup()` and `Database.restoreBackup()`. Version 0.4 added `conditionalBatch()` for guarded changes across collections. Version 0.5 adds the `Queue` API, with schema-versioned job records stored through the same engine. These additions preserve the earlier document/query API and log format, so existing directories open directly. Ordinary opening still recovers an incomplete final append according to the engine's recovery rules; `verify()` is strict and never repairs a log. A backup container must be restored through the backup API rather than copied over a live log. Recreate session indexes after opening the restored directory, and resume the changefeed from a cursor belonging to that restored history.
+Version 0.3 added `verify()`, `backup()` and `Database.restoreBackup()`. Version 0.4 added `conditionalBatch()` for guarded changes across collections. Version 0.5 added the `Queue` API. Version 0.6 adds exact retrieval and revision-protected agent checkpoints with schema-versioned records stored through the same engine. These additions preserve the earlier document/query API and log format, so existing directories open directly. Ordinary opening still recovers an incomplete final append according to the engine's recovery rules; `verify()` is strict and never repairs a log. A backup container must be restored through the backup API rather than copied over a live log. Recreate session indexes after opening the restored directory, and resume the changefeed from a cursor belonging to that restored history.
 
-The `_cedro.jobs.` collection prefix becomes reserved in 0.5, and direct application writes to it are rejected. If an earlier application used that prefix for its own collections, migrate those records with version 0.4 before enabling queues under the same names. Ordinary application collections retain their existing behavior.
+The `_cedro.jobs.` collection prefix became reserved in 0.5; `_cedro.agents.` becomes reserved in 0.6. Direct application writes to either prefix are rejected. If an earlier application used that prefix for its own collections, migrate queue-prefix records with version 0.4, or agent-prefix records with version 0.5, before enabling the corresponding feature under those names. Ordinary application collections retain their existing behavior.
 
 ## Build and test
 
@@ -299,6 +395,7 @@ npm pack
 node examples/offline-backup.mjs
 node examples/guarded-inventory.mjs
 node examples/local-worker.mjs
+node examples/agent-memory.mjs
 ```
 
 The build vendors only the core `Cargo.toml`, `Cargo.lock`, `src/` and license into `core/`. Packed packages include those sources plus locked Rust dependencies and build without a path outside the package. Build native artifacts separately for each platform; a successful source build on one platform does not establish compatibility with another.

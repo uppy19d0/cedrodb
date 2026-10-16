@@ -19,6 +19,25 @@ try {
     assert.throws(() => database.collection('large').get('integer'));
     assert.throws(() => database.collection('large').findPage());
     assert.throws(() => database.changes({ since: 3, limit: 1 }));
+  } else if (mode === 'agent') {
+    const exact = 0.19450526354013234;
+    const agents = database.agent('interop');
+    const previous = agents.get('thread:1');
+    assert.deepEqual(previous.state, { ratio: exact, source: 'python' });
+    assert.deepEqual(previous.metadata, { ratio: exact });
+    assert.deepEqual(database.collection('outbox').get('python-agent'), { ready: true });
+    const saved = agents.checkpoint('thread:1', { ratio: exact, source: 'node' }, {
+      expectedRevision: previous.revision, metadata: previous.metadata, nowMs: 1001,
+      operations: [{ kind: 'put', collection: 'results', key: 'node-agent', value: { ratio: exact } }]
+    });
+    assert.equal(saved.applied, true);
+    assert.ok(saved.checkpoint.revision > previous.revision);
+    const memory = database.collection('memory');
+    memory.createIndex('model');
+    const hits = memory.search({ text: 'refund', vector: [exact, 1], minVectorScore: 0.99,
+      filters: [{ field: 'model', op: 'eq', value: 'demo' }] });
+    assert.equal(hits.scanned, 1);
+    assert.deepEqual(hits.hits.map(hit => hit.key), ['policy']);
   } else {
     throw new Error('Unknown interoperability check mode');
   }

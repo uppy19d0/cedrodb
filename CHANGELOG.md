@@ -2,6 +2,16 @@
 
 All releases remain experimental. Future work is separate in [the roadmap](docs/roadmap.md).
 
+## 0.6.0 — 2026-10-15
+
+- Added native agent checkpoint stores with expected-revision fencing, scoped thread IDs and atomic document/outbox writes.
+- Added text/BM25, exact vector/cosine and hybrid/RRF retrieval with metadata prefilters, equality-index selection, deterministic ties and explicit scan budgets.
+- Added typed Node/Python APIs, restart/conflict/atomicity/ranking/budget tests, and model-independent agent memory examples.
+- Enabled exact floating-point parsing to preserve stored numeric values and vector-search behavior across reopening and backup restoration.
+- Reserved `_cedro.agents.*` against generic writes and queue acknowledgements; migrate conflicting pre-existing collections before upgrading.
+- Documented AI ecosystem research and application boundaries. This is not a LangGraph saver, model runtime, authorization system or ANN engine.
+- Preserved the existing transaction log and backup formats.
+
 ## 0.5.0 — 2026-10-15
 
 - Added persistent local queues with stable job IDs, delayed availability, priorities and deterministic claim ordering.

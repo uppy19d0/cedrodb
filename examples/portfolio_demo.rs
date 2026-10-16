@@ -1,5 +1,6 @@
 use cedrodb::{
-    ChangeOperation, Condition, Database, EnqueueOptions, Filter, FilterOp, JobStatus, Query,
+    AgentStatus, ChangeOperation, CheckpointOptions, Condition, Database, EnqueueOptions, Filter,
+    FilterOp, JobStatus, Query, SearchQuery,
 };
 use serde_json::json;
 use std::path::PathBuf;
@@ -217,6 +218,103 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let dead_lettered =
         jobs.queue_get("reports", "job:failure")?.unwrap().status == JobStatus::Dead;
+    let agent_path = directory.0.join("agent-demo");
+    let agent_db = Database::open(&agent_path)?;
+    // Synthetic vectors make the example deterministic. No embedding model,
+    // model endpoint, or retrieval-quality benchmark is involved.
+    let checkpoint = agent_db.agent_checkpoint(
+        "support",
+        "conversation:42",
+        json!({"messages":[{"role":"user","content":"What is the refund policy?"}]}),
+        CheckpointOptions {
+            now_ms: 1000,
+            status: AgentStatus::Waiting,
+            metadata: json!({"schema":"support-v1"}),
+            operations: vec![
+                ChangeOperation::Put {
+                    collection: "memory".into(), key: "refund-policy".into(),
+                    value: json!({"text":"Refund refund policy: 30 days.","embedding":[1.0,0.0],"model":"demo-v1","tenant":"shop-1"}),
+                },
+                ChangeOperation::Put {
+                    collection: "memory".into(), key: "shipping-policy".into(),
+                    value: json!({"text":"Shipping deliveries: 3 days.","embedding":[0.8,0.2],"model":"demo-v1","tenant":"shop-1"}),
+                },
+                ChangeOperation::Put {
+                    collection: "memory".into(), key: "another-model".into(),
+                    value: json!({"text":"Different embedding model.","embedding":[0,0,0],"model":"other","tenant":"shop-2"}),
+                },
+            ],
+            ..Default::default()
+        },
+    )?;
+    let initial_revision = checkpoint.checkpoint.as_ref().unwrap().revision;
+    drop(agent_db);
+    let agent_db = Database::open(agent_path)?;
+    let resumed_checkpoint = agent_db.agent_get("support", "conversation:42")?.unwrap();
+    let resumed = resumed_checkpoint.revision == initial_revision
+        && resumed_checkpoint.status == AgentStatus::Waiting;
+    agent_db.create_index("memory", "model")?;
+    let memory = agent_db.search(
+        "memory",
+        SearchQuery {
+            text: Some("refund policy".into()),
+            vector: Some(vec![1.0, 0.0]),
+            filters: vec![
+                Filter {
+                    field: "model".into(),
+                    op: FilterOp::Eq,
+                    value: json!("demo-v1"),
+                },
+                Filter {
+                    field: "tenant".into(),
+                    op: FilterOp::Eq,
+                    value: json!("shop-1"),
+                },
+            ],
+            ..Default::default()
+        },
+    )?;
+    let agent_completed = agent_db.agent_checkpoint(
+        "support",
+        "conversation:42",
+        json!({"answer":"Refunds are available within 30 days.","memory_keys":["refund-policy"]}),
+        CheckpointOptions {
+            expected_revision: Some(initial_revision),
+            now_ms: 1001,
+            status: AgentStatus::Completed,
+            operations: vec![
+                ChangeOperation::Put {
+                    collection: "answers".into(),
+                    key: "conversation:42".into(),
+                    value: json!({"source":"refund-policy"}),
+                },
+                ChangeOperation::Put {
+                    collection: "outbox".into(),
+                    key: "conversation:42:answered".into(),
+                    value: json!({"event_id":"conversation:42:answered","type":"answer.ready"}),
+                },
+            ],
+            ..Default::default()
+        },
+    )?;
+    let agent_stale = agent_db.agent_checkpoint(
+        "support",
+        "conversation:42",
+        json!({"answer":"obsolete"}),
+        CheckpointOptions {
+            expected_revision: Some(initial_revision),
+            now_ms: 1002,
+            ..Default::default()
+        },
+    )?;
+    let agent_changes = agent_db.changes(initial_revision, 10)?;
+    let atomic_outbox = agent_completed.applied
+        && agent_changes.transactions.len() == 1
+        && agent_changes.transactions[0].operations.len() == 3
+        && agent_changes.transactions[0].cursor == agent_completed.cursor
+        && agent_db
+            .get("outbox", "conversation:42:answered")?
+            .is_some();
     let output = json!({
         "engine": {"name": "CedroDB", "version": env!("CARGO_PKG_VERSION")},
         "generatedBy": "cargo run --example portfolio_demo",
@@ -240,7 +338,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "jobs": {"deduplicated":!duplicate_job.inserted,"expired_reclaimed":new_lease.attempts == 2,
                 "stale_ack_rejected":!stale_ack,"completed":completed,"dead_lettered":dead_lettered,
                 "attempts":new_lease.attempts,"outputs":jobs.scan("reports")?.len(),
-                "history_resumed":history_resumed,"stats":jobs.queue_stats("reports",1201)?}
+                "history_resumed":history_resumed,"stats":jobs.queue_stats("reports",1201)?},
+            "agent_memory": {"checkpoint_saved":checkpoint.applied,"stale_rejected":!agent_stale.applied,
+                "resumed":resumed,"atomic_outbox":atomic_outbox,"search_mode":memory.mode,
+                "search_hits":memory.hits.len(),"scanned":memory.scanned,
+                "top_key":memory.hits.first().map(|hit|hit.key.as_str()),"revision":agent_completed.cursor}
         },
         "capabilities": [
             "Rust engine with its own append-only transaction log",
@@ -254,7 +356,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Exclusive database file lock",
             "Verified full-history backups and validated no-overwrite restoration",
             "Atomic conditional batches spanning inventory, orders and outbox",
-            "Durable local jobs with priorities, leases, retries and fenced atomic acknowledgments"
+            "Durable local jobs with priorities, leases, retries and fenced atomic acknowledgments",
+            "Revision-fenced agent checkpoints with atomic document and outbox writes",
+            "Bounded text, exact vector and hybrid memory retrieval with metadata prefilters"
         ],
         "limitations": [
             format!("Experimental v{}: not production validated", env!("CARGO_PKG_VERSION")),
@@ -266,6 +370,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Outbox consumers need idempotency; no exactly-once external side effects",
             "No SQL, MVCC, columnar storage, replication or C ABI yet",
             "Aggregates use f64 and can lose integer precision above 2^53",
+            "Exact retrieval scans and sorts candidates; no ANN index or model inference",
+            "Agent checkpoints store application state; no workflow execution or authorization",
             "Durability depends on operating system, filesystem and storage sync semantics"
         ]
     });

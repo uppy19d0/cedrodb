@@ -1,7 +1,10 @@
 //! Native calls only: Python handles its public JSON ergonomics, while every
 //! database operation, transaction and recovery runs in the shared Rust core.
 
-use cedrodb::{ChangeOperation, Condition, Database, EnqueueOptions, Options, Query};
+use cedrodb::{
+    AgentStatus, ChangeOperation, CheckpointOptions, Condition, Database, EnqueueOptions, Options,
+    Query, SearchQuery,
+};
 use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use serde::Deserialize;
@@ -42,6 +45,25 @@ enum BatchOperation {
 struct ConditionalRequest {
     conditions: Vec<Condition>,
     operations: Vec<ChangeOperation>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case", deny_unknown_fields)]
+enum AgentRequest {
+    Get {
+        namespace: String,
+        thread_id: String,
+    },
+    Checkpoint {
+        namespace: String,
+        thread_id: String,
+        state: Value,
+        expected_revision: Option<u64>,
+        now_ms: u64,
+        status: AgentStatus,
+        metadata: Value,
+        operations: Vec<ChangeOperation>,
+    },
 }
 
 #[derive(Deserialize)]
@@ -353,6 +375,56 @@ impl NativeDatabase {
             let query: Query = parse(query)?;
             self.with_database(|database| {
                 encode(&database.query(collection, query).map_err(engine_error)?)
+            })
+        })
+    }
+
+    fn search_json(&self, py: Python<'_>, collection: &str, query: &str) -> PyResult<String> {
+        py.detach(|| {
+            let query: SearchQuery = parse(query)?;
+            self.with_database(|database| {
+                encode(&database.search(collection, query).map_err(engine_error)?)
+            })
+        })
+    }
+
+    fn agent_json(&self, py: Python<'_>, request: &str) -> PyResult<String> {
+        py.detach(|| {
+            let request: AgentRequest = parse(request)?;
+            self.with_database(|database| match request {
+                AgentRequest::Get {
+                    namespace,
+                    thread_id,
+                } => encode(
+                    &database
+                        .agent_get(&namespace, &thread_id)
+                        .map_err(engine_error)?,
+                ),
+                AgentRequest::Checkpoint {
+                    namespace,
+                    thread_id,
+                    state,
+                    expected_revision,
+                    now_ms,
+                    status,
+                    metadata,
+                    operations,
+                } => encode(
+                    &database
+                        .agent_checkpoint(
+                            &namespace,
+                            &thread_id,
+                            state,
+                            CheckpointOptions {
+                                expected_revision,
+                                now_ms,
+                                status,
+                                metadata,
+                                operations,
+                            },
+                        )
+                        .map_err(engine_error)?,
+                ),
             })
         })
     }

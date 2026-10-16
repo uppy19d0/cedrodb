@@ -1,7 +1,10 @@
 # CedroDB for Python
 
-**Keep local jobs, application documents and recovery history in one database.**
+**Keep agent checkpoints, searchable memory and local jobs in one database.**
 CedroDB is an embedded document engine written in Rust, with a native Python API.
+Save agent state and its result/outbox writes atomically with expected-revision
+checks. Retrieve memory using text/BM25, supplied vectors/cosine or hybrid/RRF,
+with metadata prefilters and explicit scan budgets. No model service is required.
 A form submission and its outbox event can commit together, indexed queries find
 pending work, and a durable changefeed lets your application resume processing
 after restarting. Durable queues schedule local work with leases, retries and
@@ -21,10 +24,10 @@ claims or production-readiness guarantees.
 
 ## Installation
 
-For the 0.5.0 release on PyPI:
+For the 0.6.0 release on PyPI:
 
 ```sh
-python -m pip install cedrodb==0.5.0
+python -m pip install cedrodb==0.6.0
 ```
 
 If a version is not listed on PyPI, obtain its wheel or self-contained source
@@ -32,7 +35,7 @@ archive from [GitHub Releases](https://github.com/uppy19d0/cedrodb/releases), th
 install the downloaded file:
 
 ```sh
-python -m pip install ./cedrodb-0.5.0.tar.gz
+python -m pip install ./cedrodb-0.6.0.tar.gz
 ```
 
 A compatible wheel needs no Rust toolchain at runtime. Source installation
@@ -369,15 +372,162 @@ a stored null. A mismatch returns `False` without appending a transaction. The
 comparison covers the complete JSON value. Exact integers and integral floats
 compare equally only within the safe range ±2**53; booleans remain distinct.
 
+## Persist agent state and its outbox together
+
+`db.agent(namespace)` stores framework-neutral JSON checkpoints. A revision
+check prevents a stale worker from replacing newer state. Checkpoint and
+business/outbox operations are committed in the same durable transaction.
+
+```python
+from cedrodb import Database
+
+with Database("./assistant.cedro") as db:
+    agent = db.agent("support")
+    current = agent.get("conversation:1")
+    result = agent.checkpoint(
+        "conversation:1", {"messages": [{"role": "assistant", "text": "Saved."}]},
+        expected_revision=None if current is None else current["revision"],
+        status="completed", metadata={"owner": "ana", "state_format": "support.v1"},
+        operations=[{
+            "kind": "put", "collection": "outbox", "key": "conversation:1:answered",
+            "value": {"event_id": "conversation:1:answered", "type": "answer.ready"},
+        }],
+    )
+    if not result["applied"]:
+        print("Reload before retrying:", result["checkpoint"])
+```
+
+`expected_revision=None` means **create only if absent**. It is never an
+unconditional overwrite. Pass the revision returned by `get()` when updating.
+On conflict, `applied` is false, `cursor` stays unchanged and `checkpoint` is
+the current checkpoint (or `None` for an absent thread). No checkpoint, outbox
+or other business write is applied. Invalid requests raise before mutation,
+including when a revision would conflict.
+
+Success returns `applied=True`, a `cursor` and the new `checkpoint`. Its
+`revision` is the durable transaction cursor: it increases with database history
+and need not be consecutive for a particular thread. The envelope contains
+`schema_version=1`, `thread_id`, `revision`, `state`, `metadata`, `status` and
+`updated_at`. Status is `running` (default), `waiting` or `completed`; metadata
+defaults to `{}` and must be a JSON object. State may be any supported portable
+JSON value, including null. `now_ms` defaults to Unix epoch milliseconds.
+Checkpoints survive reopening and are included in backups and the changefeed.
+
+Namespace names contain 1..128 ASCII letters, digits, `_`, `.` or `-`; thread
+IDs contain 1..4096 UTF-8 bytes without NUL. State and metadata numbers must be
+finite and within ±`MAX_SAFE_INTEGER`, recursively. Revisions and timestamps
+use integers in the safe range; booleans are rejected as numeric options.
+Optional business operations keep ordinary collection integer limits. The
+checkpoint envelope and all operations count toward document/frame/state limits;
+an oversized request applies no partial writes.
+
+Generic writes to `_cedro.agents.*` and `_cedro.jobs.*` are rejected. Use their
+dedicated APIs. Namespaces organize data; they are not an authorization boundary.
+The application owns state schemas, orchestration, tool permissions and external
+effect deduplication. A checkpoint records a completed persistence step; it does
+not resume a model/tool call or promise exactly-once external delivery. Restoring
+a backup creates a history branch; revisions do not fence independently restored
+copies or external systems. This API is not a LangGraph `BaseCheckpointSaver`.
+
+## Retrieve local knowledge by text, vector or both
+
+`Collection.search()` ranks committed documents with Unicode alphanumeric
+lowercase tokenization and BM25, exact cosine similarity, or reciprocal rank
+fusion (RRF) when both queries are provided. Embeddings come from your application;
+the SDK does not call a model or a network service.
+
+```python
+with Database("./assistant.cedro") as db:
+    knowledge = db.collection("knowledge")
+    # Synthetic vectors illustrate the API; these are not model embeddings.
+    knowledge.put_many({
+        "backup": {"owner": "ana", "text": "local backup recovery", "embedding": [1, 0]},
+        "jobs": {"owner": "ana", "text": "durable worker retries", "embedding": [0.6, 0.8]},
+    })
+    knowledge.create_index("owner")
+    page = knowledge.search(
+        text="backup", vector=[1, 0],
+        filters=[{"field": "owner", "op": "eq", "value": "ana"}],
+        limit=5, max_scanned=1000,
+    )
+    for hit in page["hits"]:
+        print(hit["key"], hit["score"], hit["text_score"], hit["vector_score"])
+```
+
+Use `text` alone, `vector` alone or both. The public signature is:
+
+```python
+collection.search(
+    *, text=None, vector=None, vector_field="embedding", text_fields=None,
+    filters=None, limit=10, max_scanned=10_000, min_vector_score=None,
+)
+```
+
+`text_fields=None` means `["text"]`; fields can be top-level names or JSON
+Pointers such as `/content/body`. Supply 1..8 unique text fields. Text must
+contain 1..4096 UTF-8 bytes and 1..64 distinct alphanumeric terms. Vectors contain
+1..4096 finite numeric coordinates and must have nonzero magnitude. Present
+eligible document vectors must be valid and match the query dimensions; missing
+vectors are skipped. An invalid eligible vector raises instead of silently
+removing a possible match. `min_vector_score`, when supplied, requires a vector
+query and a finite value in `[-1, 1]`.
+
+Metadata filters use the same ANDed predicates as `find_page()` and run before
+document vector validation/scoring. Apply the appropriate owner/tenant filter
+on every request; the database does not authorize access. An equality index can
+reduce the candidate set and remains local to the open handle. Recreate it on
+reopen. `max_scanned` (1..100000) counts candidates visited **before** filters;
+exceeding it raises, without returning a partial top-k. `limit` is 1..1000.
+
+The result contains `hits`, `scanned`, `matched`, `used_index` and `mode`
+(`text`, `vector` or `hybrid`). Hits include the original `key`/`value`, final
+`score` and nullable `text_score`/`vector_score`. `matched` counts matches before
+the result limit. Text mode uses BM25 (`k1=1.2`, `b=0.75`), vector mode uses
+cosine, and hybrid mode fuses complete channel rankings with RRF (`k=60`). Ties
+are ordered by key. Scores from different modes are not directly comparable.
+
+This is exact bounded scanning over a small local corpus, without a full-text
+inverted index or approximate nearest-neighbor index. All live documents and
+ranking buffers use memory; retain the existing database content limits and use
+`max_scanned` to bound work. It does not extract facts, generate embeddings,
+split documents, manage model versions or provide a RAG pipeline.
+
+Run `python examples/agent_memory.py` for a network-free retrieval,
+checkpoint/outbox, stale-write rejection and reopen example.
+
+### Optional PydanticAI conversation recipe
+
+The package has no agent-framework dependency. An optional recipe uses the
+published `pydantic-ai-slim==2.56.0` API with Python >=3.11 (tested with Python
+3.12.15). The base CedroDB SDK continues to support Python >=3.9:
+
+```sh
+python -m pip install 'pydantic-ai-slim==2.56.0'
+python examples/pydantic_ai_history.py
+```
+
+It serializes `result.conversation` using `ConversationTypeAdapter`, closes and
+reopens CedroDB, and passes the restored bundle as `conversation=` to a fresh
+agent. Assertions check preserved conversation identity, accumulated request
+usage, and growing message history. The updated conversation and an outbox
+event are then committed together. Its `TestModel` makes no network calls and
+needs no model credentials. This is conversation storage, not a durable-execution
+backend: it does not resume interrupted model/tool calls or authorize tool
+approvals. Configure usage limits in your application and load conversations
+only from trusted application storage. Pin the framework version and retest
+serialization when upgrading. See the upstream
+[conversation documentation](https://pydantic.dev/docs/ai/core-concepts/message-history/).
+
 ## API reference
 
 | Object | Methods |
 | --- | --- |
-| `Database` | `collection`, `queue`, `batch`, `conditional_batch`, `transaction`, `changes`, `stats`, `verify`, `backup`, `close` |
+| `Database` | `collection`, `agent`, `queue`, `batch`, `conditional_batch`, `transaction`, `changes`, `stats`, `verify`, `backup`, `close` |
 | `Database.restore_backup` | Static restore with optional content-limit keywords |
-| `Collection` | `put`, `get`, `delete`, `put_many`, `find`, `find_page`, `iter_records`, `create_index`, `compare_exchange`, `aggregate` |
+| `Collection` | `put`, `get`, `delete`, `put_many`, `find`, `find_page`, `search`, `iter_records`, `create_index`, `compare_exchange`, `aggregate` |
 | `Transaction` | `put(collection, key, value)`, `delete(collection, key)`, `commit`, `rollback`, context manager |
 | `Queue` | `enqueue`, `claim`, `ack`, `fail`, `extend`, `get`, `stats`, `recover_expired`, `retry_dead` |
+| `AgentStore` | `get(thread_id)`, `checkpoint(thread_id, state, *, expected_revision, now_ms, status, metadata, operations)` |
 
 `Database(path, *, max_document_bytes=1_048_576, max_frame_bytes=16_777_216,
 max_state_bytes=67_108_864)` opens or creates a directory. Paths accept strings
@@ -405,6 +555,10 @@ and a `py.typed` marker are included.
 - No SQL, MVCC, replication, encryption or automatic synchronization.
 - Queue scheduling scans jobs synchronously, without background execution,
   retention or distributed fencing; job numbers use the cross-SDK safe range.
+- Agent state uses revision checks within one database history, without an
+  agent runtime or framework checkpointer protocol implementation.
+- Retrieval uses exact scans, without ANN or full-text inverted indexes;
+  embedding generation and corpus lifecycle are application responsibilities.
 
 ## Upgrade from 0.2 to 0.3
 
@@ -442,6 +596,18 @@ documents keep their previous range. Run expired recovery in your application
 and deduplicate external effects; existing outbox consumers may need to filter
 out internal queue operations from the changefeed.
 
+## Upgrade from 0.5 to 0.6
+
+Existing APIs and database/backup formats remain compatible. The new APIs are
+`db.agent(namespace)` for revision-fenced checkpoints and `collection.search()`
+for bounded text/vector/hybrid retrieval. `_cedro.agents.*` is now reserved,
+in addition to `_cedro.jobs.*`. If an older application wrote its own records
+there, export or move them with the old SDK before upgrading; they are not
+automatically converted into checkpoint envelopes. Internal checkpoint writes
+appear in the changefeed, so outbox consumers should select their intended
+collections. State/metadata use portable numbers; ordinary documents retain
+their previous numeric range.
+
 ## Build and test
 
 ```sh
@@ -453,10 +619,11 @@ maturin build --release --out dist
 maturin sdist --out dist
 python -m pip install ./dist/<your-platform-wheel>.whl
 python -m unittest discover -s tests -v
-python scripts/verify_sdist.py dist/cedrodb-0.5.0.tar.gz
+python scripts/verify_sdist.py dist/cedrodb-0.6.0.tar.gz
 python examples/offline_forms.py
 python examples/inventory_outbox.py
 python examples/local_worker.py
+python examples/agent_memory.py
 ```
 
 `prepare_core.py` copies only the core manifest, license and Rust source into

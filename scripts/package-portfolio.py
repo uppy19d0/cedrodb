@@ -51,6 +51,9 @@ def main():
     jobs = cases["jobs"]
     if not all(jobs[name] for name in ["deduplicated", "expired_reclaimed", "stale_ack_rejected", "completed", "dead_lettered", "history_resumed"]) or jobs["attempts"] != 2 or jobs["outputs"] != 1 or jobs["stats"]["done"] != 1 or jobs["stats"]["dead"] != 1:
         raise ValueError("Durable queue recovery produced unexpected results")
+    agent = cases["agent_memory"]
+    if not all(agent[name] is True for name in ["checkpoint_saved", "stale_rejected", "resumed", "atomic_outbox"]) or agent["search_mode"] != "hybrid" or agent["search_hits"] != 2 or agent["scanned"] != 2 or agent["top_key"] != "refund-policy" or agent["revision"] != 2:
+        raise ValueError("Agent checkpoint and hybrid-memory recovery produced unexpected results")
 
     fixed = ["Cargo.toml", "Cargo.lock", "README.md", "CHANGELOG.md", "LICENSE", ".gitignore"]
     sources = [root / name for name in fixed]

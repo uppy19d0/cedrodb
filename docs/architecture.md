@@ -2,7 +2,7 @@
 
 ## Modelo
 
-Una base es un directorio con un archivo `cedro.log`. Su apertura toma un lock exclusivo del sistema operativo, carga los frames confirmados y reconstruye un `BTreeMap` por colección. Los valores son `serde_json::Value`; el mapa ordena las claves, sin índices por campos de documentos.
+Una base es un directorio con un archivo `cedro.log`. Su apertura toma un lock exclusivo del sistema operativo, carga los frames confirmados y reconstruye un `BTreeMap` por colección. Los valores son `serde_json::Value`; el mapa ordena las claves, con índices de igualdad opcionales por campos de documentos.
 
 ```text
 API Rust
@@ -78,3 +78,11 @@ Estas decisiones simplifican el prototipo. Se necesitan resultados medidos antes
 ## Validación pendiente
 
 Además de las pruebas de API, corrupción y recuperación incluidas: inyección de fallos de escritura y sync, fuzzing, ensayos prolongados, apagones controlados en hardware y pruebas de sistemas de archivos. El prototipo no se presenta como almacenamiento de producción.
+
+## Memoria y checkpoints de agentes (0.6)
+
+La búsqueda aplica filtros antes de validar vectores y calcular el corpus textual; puede reutilizar el índice de igualdad más selectivo. Calcula BM25, coseno exacto o rankings fusionados con RRF bajo el mutex, con un presupuesto de candidatos y error explícito al superarlo. No mantiene un índice ANN ni llama a modelos.
+
+Los checkpoints se guardan en `_cedro.agents.<namespace>`. El método nativo verifica la revisión esperada y confirma el nuevo checkpoint junto con documentos ordinarios en un mismo frame. La revisión es el cursor global de ese commit. Los métodos genéricos y las escrituras de ACK no pueden mutar esa colección reservada. Los estados de agente son datos de la aplicación, no transiciones ejecutadas por un runtime.
+
+El parser JSON usa `float_roundtrip` para reconstruir exactamente los valores f64 del log. Esto preserva memoria, estados y decisiones de umbral vectorial al reabrir; no cambia el framing ni convierte la aritmética de scoring en aritmética exacta.
