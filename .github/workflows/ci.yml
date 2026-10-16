@@ -66,6 +66,10 @@ jobs:
         if: runner.os == 'Linux'
         working-directory: bindings/python
         run: maturin sdist --out dist
+      - name: Verify the self-contained source distribution and CLI
+        if: runner.os == 'Linux'
+        working-directory: bindings/python
+        run: python scripts/verify_sdist.py dist/*.tar.gz
       - uses: actions/upload-artifact@v4
         with:
           name: node-${{ matrix.os }}

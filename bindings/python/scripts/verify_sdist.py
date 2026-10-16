@@ -53,9 +53,14 @@ def verify(artifact: Path) -> None:
             "result = unittest.TextTestRunner(verbosity=2).run(suite)",
             "raise SystemExit(not result.wasSuccessful())",
         ])
+        test_environment = build_environment.copy()
+        # CLI tests spawn fresh interpreters. Give them the same isolated wheel
+        # as the parent instead of an unrelated package in the build venv.
+        test_environment["PYTHONPATH"] = str(installed)
+        test_environment["PYTHONNOUSERSITE"] = "1"
         subprocess.run([
             sys.executable, "-s", "-c", test, str(installed), str(source / "tests"),
-        ], cwd=directory, env=build_environment, check=True)
+        ], cwd=directory, env=test_environment, check=True)
         print("Self-contained sdist rebuilt, installed and tested successfully.")
 
 
