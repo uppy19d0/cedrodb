@@ -22,7 +22,7 @@ function assertMetrics(metrics, attempts, successes, failures) {
 }
 
 test('diagnostics reports configured limits, collections and indexes without writing to the log', (t) => {
-  const { directory, database, documents } = fixture(t, {
+  const { database, documents } = fixture(t, {
     maxDocumentBytes: 4096, maxFrameBytes: 65536, maxStateBytes: 1048576,
   });
   documents.putMany([
@@ -32,8 +32,10 @@ test('diagnostics reports configured limits, collections and indexes without wri
   documents.createIndex('kind');
   documents.createIndex('/nested/flag');
   database.collection('other').put('x', true);
-  const log = path.join(directory, 'cedro.log');
-  const before = fs.readFileSync(log);
+  // Inspect through the owning handle: Windows rejects a second file descriptor
+  // while the database holds its exclusive log lock.
+  const before = database.verify();
+  const cursor = database.stats().latestCursor;
   const report = database.diagnostics();
   assert.deepEqual(report.stats, database.stats());
   assert.deepEqual(report.limits, { maxDocumentBytes: 4096, maxFrameBytes: 65536, maxStateBytes: 1048576 });
@@ -45,7 +47,9 @@ test('diagnostics reports configured limits, collections and indexes without wri
   assert.deepEqual(collection.indexFields.slice().sort(), ['/nested/flag', 'kind']);
   assert.equal(report.collections.reduce((sum, entry) => sum + entry.contentBytes, 0), report.stats.contentBytes);
   assert.deepEqual(database.diagnostics(), report);
-  assert.deepEqual(fs.readFileSync(log), before);
+  assert.deepEqual(database.verify(), before);
+  assert.equal(database.stats().logBytes, before.logBytes);
+  assert.equal(database.stats().latestCursor, cursor);
 });
 
 test('profileQuery reports actual scan/lookahead counts and reuses normal query results', (t) => {
