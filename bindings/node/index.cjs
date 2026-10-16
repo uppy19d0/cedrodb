@@ -580,4 +580,4 @@ class Queue {
   }
 }
 
-module.exports = { Database, Collection, Queue, AgentStore, version: '0.7.0' };
+module.exports = { Database, Collection, Queue, AgentStore, version: '0.8.0' };

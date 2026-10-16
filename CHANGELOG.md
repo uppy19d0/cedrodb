@@ -2,6 +2,13 @@
 
 All releases remain experimental. Future work is separate in [the roadmap](docs/roadmap.md).
 
+## 0.8.0 — 2026-10-16
+
+- Added the `cedrodb` console command to the Python package, sharing its implementation with `python -m cedrodb`.
+- Added document operations, atomic batches, paginated queries, text/vector/hybrid search, profiles, collection inventory, stats, diagnostics, verification, backups, restoration and changefeed commands.
+- Added strict bounded JSON input via argument, file or stdin, compact JSON output/errors, explicit database initialization and stable exit codes distinguishing absent records from stored null.
+- Split CLI parsing, JSON input, database operations and isolated performance tools into dedicated modules. Added native subprocess tests and console-entry-point packaging checks.
+
 ## 0.7.0 — 2026-10-15
 
 - Added owner-handle diagnostics with content limits, collection/index inventory, handle health and bounded session counters for queries, searches and nonempty shared commit attempts.

@@ -45,9 +45,11 @@ def verify(artifact: Path) -> None:
             "--target", str(installed), str(wheel),
         ], cwd=directory, env=build_environment, check=True)
         test = "\n".join([
-            "import pathlib, sys, unittest",
+            "import pathlib, sys, unittest, importlib.metadata",
             "sys.path.insert(0, sys.argv[1])",
             "import cedrodb._native as native",
+            "entry = next(e for e in importlib.metadata.distribution('cedrodb').entry_points if e.group == 'console_scripts' and e.name == 'cedrodb')",
+            "assert entry.value == 'cedrodb.cli:main' and callable(entry.load())",
             "assert pathlib.Path(native.__file__).resolve().is_relative_to(pathlib.Path(sys.argv[1]).resolve())",
             "suite = unittest.defaultTestLoader.discover(sys.argv[2])",
             "result = unittest.TextTestRunner(verbosity=2).run(suite)",

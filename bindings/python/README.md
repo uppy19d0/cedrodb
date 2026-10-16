@@ -31,7 +31,7 @@ interpreter directly, so activation and shell execution-policy changes are unnec
 
 ```sh
 python3 -m venv .venv
-.venv/bin/python -m pip install cedrodb==0.7.0
+.venv/bin/python -m pip install cedrodb==0.8.0
 .venv/bin/python -m cedrodb doctor
 ```
 
@@ -39,14 +39,14 @@ python3 -m venv .venv
 
 ```powershell
 py -3 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install cedrodb==0.7.0
+.\.venv\Scripts\python.exe -m pip install cedrodb==0.8.0
 .\.venv\Scripts\python.exe -m cedrodb doctor
 ```
 
 With an environment already selected, the installation command is simply:
 
 ```sh
-python -m pip install cedrodb==0.7.0
+python -m pip install cedrodb==0.8.0
 ```
 
 `doctor` prints JSON containing the actual interpreter, architecture and package
@@ -68,7 +68,7 @@ are outside the tested ABI matrix. A compatible wheel installs without Rust.
 To require a binary and fail clearly if none matches:
 
 ```sh
-python -m pip install --only-binary=:all: cedrodb==0.7.0
+python -m pip install --only-binary=:all: cedrodb==0.8.0
 ```
 
 A source build needs Python 3.9+, Rust 1.85+, Cargo and a platform C linker
@@ -77,7 +77,7 @@ build tools on Windows). Source-build availability is not a support guarantee.
 The self-contained source archive bundles the Rust core:
 
 ```sh
-python -m pip install ./cedrodb-0.7.0.tar.gz
+python -m pip install ./cedrodb-0.8.0.tar.gz
 ```
 
 Check [GitHub Releases](https://github.com/uppy19d0/cedrodb/releases) for actual
@@ -712,7 +712,7 @@ maturin build --release --out dist
 maturin sdist --out dist
 python -m pip install ./dist/<your-platform-wheel>.whl
 python -m unittest discover -s tests -v
-python scripts/verify_sdist.py dist/cedrodb-0.7.0.tar.gz
+python scripts/verify_sdist.py dist/cedrodb-0.8.0.tar.gz
 python examples/offline_forms.py
 python examples/inventory_outbox.py
 python examples/local_worker.py
@@ -728,3 +728,7 @@ and runs its tests. Keep `Cargo.lock` for reproducible dependency versions.
 [Source](https://github.com/uppy19d0/cedrodb) ·
 [Demo](https://www.ltavarez.me/labs/cedrodb) ·
 [Issues](https://github.com/uppy19d0/cedrodb/issues)
+
+## Command-line interface (0.8.0)
+
+The current package registers `cedrodb` and keeps `python -m cedrodb` as an equivalent entry point. Run `cedrodb --help` for document, query, retrieval, maintenance and backup commands. See [the CLI guide](../../docs/cli.md). Earlier published 0.7.0 wheels only contain `doctor` and `benchmark`; build/install the current wheel to use the expanded CLI.

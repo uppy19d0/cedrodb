@@ -172,4 +172,4 @@ export class AgentStore<T extends JsonValue = JsonValue> {
   /** Save state and optional application writes in one transaction; conflicts return current checkpoint. */
   checkpoint(threadId: string, state: T, options?: CheckpointOptions): CheckpointResult<T>;
 }
-export const version: '0.7.0';
+export const version: '0.8.0';

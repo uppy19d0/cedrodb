@@ -19,7 +19,7 @@ from typing import (
 
 from ._native import CedroError, DatabaseClosedError, NativeDatabase
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 __all__ = [
     "Database", "Collection", "Transaction", "CedroError", "DatabaseClosedError",
     "MISSING", "DELETE", "JSONValue", "Filter", "Record", "QueryPage",

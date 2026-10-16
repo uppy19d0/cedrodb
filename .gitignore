@@ -17,3 +17,6 @@
 .env
 .env.*
 !.env.example
+# Editable Python native builds
+/bindings/python/python/cedrodb/_native*.so
+/bindings/python/python/cedrodb/_native*.pyd

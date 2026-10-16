@@ -1,6 +1,6 @@
 {
   "name": "cedrodb",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Native Rust storage for agent checkpoints, hybrid memory retrieval and persistent local jobs.",
   "main": "index.cjs",
   "module": "index.mjs",

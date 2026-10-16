@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "cedrodb"
-version = "0.7.0"
+version = "0.8.0"
 description = "Native Rust storage for agent checkpoints, hybrid memory retrieval and persistent local jobs"
 readme = "README.md"
 requires-python = ">=3.9"
@@ -18,6 +18,9 @@ classifiers = [
   "Programming Language :: Rust",
   "Topic :: Database :: Database Engines/Servers",
 ]
+
+[project.scripts]
+cedrodb = "cedrodb.cli:main"
 
 [project.urls]
 Homepage = "https://www.ltavarez.me/labs/cedrodb"
