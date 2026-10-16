@@ -54,6 +54,16 @@ def main():
     agent = cases["agent_memory"]
     if not all(agent[name] is True for name in ["checkpoint_saved", "stale_rejected", "resumed", "atomic_outbox"]) or agent["search_mode"] != "hybrid" or agent["search_hits"] != 2 or agent["scanned"] != 2 or agent["top_key"] != "refund-policy" or agent["revision"] != 2:
         raise ValueError("Agent checkpoint and hybrid-memory recovery produced unexpected results")
+    performance = cases["performance"]
+    if performance["results_equal"] is not True:
+        raise ValueError("Profiling changed the query/search results")
+    for operation in ["query", "search"]:
+        scan, indexed = performance[operation + "_scan"], performance[operation + "_indexed"]
+        if scan["scanned"] != 100 or indexed["scanned"] != 10 or indexed["used_index"] != "tenant":
+            raise ValueError("Index diagnostics do not describe the executed workload")
+    session = performance["diagnostics"]["session"]
+    if session["query"]["successes"] != 2 or session["search"]["successes"] != 2 or session["commit"]["successes"] != 1:
+        raise ValueError("Session diagnostics do not count the executed workload")
 
     fixed = ["Cargo.toml", "Cargo.lock", "README.md", "CHANGELOG.md", "LICENSE", ".gitignore"]
     sources = [root / name for name in fixed]

@@ -315,6 +315,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         && agent_db
             .get("outbox", "conversation:42:answered")?
             .is_some();
+    let performance_db = Database::open(directory.0.join("performance-demo"))?;
+    let mut seed = performance_db.begin_write()?;
+    for index in 0..100 {
+        seed.put(
+            "memory",
+            &format!("memory:{index:03}"),
+            json!({"tenant":index % 10,"text":"local policy","embedding":[1.0,0.0]}),
+        )?;
+    }
+    seed.commit()?;
+    let perf_query = Query {
+        filters: vec![Filter {
+            field: "tenant".into(),
+            op: FilterOp::Eq,
+            value: json!(0),
+        }],
+        limit: 1000,
+        after: None,
+    };
+    let perf_search = SearchQuery {
+        text: Some("local policy".into()),
+        vector: Some(vec![1.0, 0.0]),
+        filters: perf_query.filters.clone(),
+        ..Default::default()
+    };
+    let scan_profile = performance_db.profile_query("memory", perf_query.clone())?;
+    let scan_search = performance_db.profile_search("memory", perf_search.clone())?;
+    performance_db.create_index("memory", "tenant")?;
+    let index_profile = performance_db.profile_query("memory", perf_query)?;
+    let index_search = performance_db.profile_search("memory", perf_search)?;
+    let performance_equal = scan_profile.page.records == index_profile.page.records
+        && scan_search.page.hits == index_search.page.hits;
+    let performance_diagnostics = performance_db.diagnostics()?;
     let output = json!({
         "engine": {"name": "CedroDB", "version": env!("CARGO_PKG_VERSION")},
         "generatedBy": "cargo run --example portfolio_demo",
@@ -342,7 +375,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "agent_memory": {"checkpoint_saved":checkpoint.applied,"stale_rejected":!agent_stale.applied,
                 "resumed":resumed,"atomic_outbox":atomic_outbox,"search_mode":memory.mode,
                 "search_hits":memory.hits.len(),"scanned":memory.scanned,
-                "top_key":memory.hits.first().map(|hit|hit.key.as_str()),"revision":agent_completed.cursor}
+                "top_key":memory.hits.first().map(|hit|hit.key.as_str()),"revision":agent_completed.cursor},
+            "performance": {"results_equal":performance_equal,
+                "query_scan":scan_profile.plan,"query_indexed":index_profile.plan,
+                "search_scan":scan_search.plan,"search_indexed":index_search.plan,
+                "diagnostics":performance_diagnostics}
         },
         "capabilities": [
             "Rust engine with its own append-only transaction log",
@@ -358,7 +395,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "Atomic conditional batches spanning inventory, orders and outbox",
             "Durable local jobs with priorities, leases, retries and fenced atomic acknowledgments",
             "Revision-fenced agent checkpoints with atomic document and outbox writes",
-            "Bounded text, exact vector and hybrid memory retrieval with metadata prefilters"
+            "Bounded text, exact vector and hybrid memory retrieval with metadata prefilters",
+            "Session diagnostics and measured query/search profiles with actual index use"
         ],
         "limitations": [
             format!("Experimental v{}: not production validated", env!("CARGO_PKG_VERSION")),

@@ -38,6 +38,14 @@ try {
       filters: [{ field: 'model', op: 'eq', value: 'demo' }] });
     assert.equal(hits.scanned, 1);
     assert.deepEqual(hits.hits.map(hit => hit.key), ['policy']);
+    const cursor = database.stats().latestCursor;
+    const profile = memory.profileSearch({ text: 'refund', vector: [exact, 1], minVectorScore: 0.99,
+      filters: [{ field: 'model', op: 'eq', value: 'demo' }] });
+    assert.deepEqual(profile.page, hits);
+    assert.equal(profile.plan.candidateRecords, 1);
+    assert.equal(profile.plan.usedIndex, 'model');
+    assert.equal(database.diagnostics().session.search.successes, 2);
+    assert.equal(database.stats().latestCursor, cursor);
   } else {
     throw new Error('Unknown interoperability check mode');
   }

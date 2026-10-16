@@ -117,6 +117,33 @@ impl Database {
     /// metadata predicates run before scoring. No approximate index, model,
     /// asynchronous execution, pagination snapshot or authorization is implied.
     pub fn search(&self, collection: &str, query: SearchQuery) -> Result<SearchPage> {
+        let timer = self.metrics.search.start();
+        let result = self
+            .run_search(collection, query, false)
+            .map(|(page, _)| page);
+        timer.finish(result.is_ok());
+        result
+    }
+
+    /// Execute retrieval once; the result page and plan describe the same
+    /// locked state. SDK encoding and transport time are outside this timing.
+    pub fn profile_search(&self, collection: &str, query: SearchQuery) -> Result<SearchProfile> {
+        let timer = self.metrics.search.start();
+        let result = self.run_search(collection, query, true);
+        let elapsed_micros = timer.finish(result.is_ok());
+        result.map(|(page, plan)| SearchProfile {
+            page,
+            elapsed_micros,
+            plan,
+        })
+    }
+
+    fn run_search(
+        &self,
+        collection: &str,
+        query: SearchQuery,
+        profile: bool,
+    ) -> Result<(SearchPage, ProfilePlan)> {
         validate_collection(collection)?;
         if !(1..=1000).contains(&query.limit) {
             return Err(Error::InvalidInput("search limit must be 1..=1000".into()));
@@ -184,34 +211,15 @@ impl Database {
             used_index: None,
             mode,
         };
-        let Some(documents) = inner.state.collections.get(collection) else {
-            return Ok(page);
+        let entries =
+            query::select_candidates(&inner.state, collection, &query.filters, None, profile);
+        page.used_index = entries.used_index.clone();
+        let mut plan = ProfilePlan {
+            collection_records: entries.collection_records,
+            candidate_records: entries.candidate_records,
+            used_index: entries.used_index,
+            ..ProfilePlan::default()
         };
-        let selected_index = query
-            .filters
-            .iter()
-            .filter(|filter| filter.op == FilterOp::Eq)
-            .filter_map(|filter| {
-                inner
-                    .state
-                    .indexes
-                    .get(&(collection.to_owned(), filter.field.clone()))
-                    .map(|index| (filter, index.get(&query::index_token(&filter.value))))
-            })
-            .min_by_key(|(_, keys)| keys.map_or(0, BTreeSet::len));
-        let entries: Box<dyn Iterator<Item = (&String, &Document)> + '_> =
-            if let Some((filter, keys)) = selected_index {
-                page.used_index = Some(filter.field.clone());
-                match keys {
-                    Some(keys) => Box::new(
-                        keys.iter()
-                            .filter_map(|key| documents.get(key).map(|document| (key, document))),
-                    ),
-                    None => Box::new(std::iter::empty()),
-                }
-            } else {
-                Box::new(documents.iter())
-            };
         // The predicate order matches ordinary queries, so an equality index
         // cannot change mixed-number comparison errors in excluded documents.
         let filters: Vec<_> = query
@@ -226,7 +234,7 @@ impl Database {
         let mut document_frequencies = vec![0usize; terms.len()];
         let mut corpus_size = 0usize;
         let mut corpus_length = 0usize;
-        for (key, document) in entries {
+        for (key, document) in entries.records {
             if page.scanned == query.max_scanned as u64 {
                 return Err(Error::LimitExceeded(
                     "search scan budget exceeded; narrow filters, create an equality index, or raise max_scanned".into(),
@@ -405,6 +413,8 @@ impl Database {
                 text_score: candidate.text_score,
             })
             .collect();
-        Ok(page)
+        plan.scanned = page.scanned;
+        plan.returned = page.hits.len() as u64;
+        Ok((page, plan))
     }
 }

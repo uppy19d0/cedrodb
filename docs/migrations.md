@@ -38,3 +38,14 @@ belongs to the application.
 Search is read-only and uses existing ordinary collections; no persistent search
 index or embedding model is created. Recreate equality indexes after reopening.
 See [agent/search contracts](agents.md) before choosing budgets and data scope.
+
+## 0.6 to 0.7
+
+The transaction log and backup containers are unchanged. New diagnostics and
+profiling APIs are additive; ordinary query/search return shapes remain intact.
+Session metrics start at zero on every open and are absent from backups. Existing
+indexes remain handle-local and must still be recreated after reopening.
+
+Profiling executes the query/search and increments its session counter once.
+Do not wrap a profile call with an additional ordinary query unless two
+executions are intended. The application owns metric export and retention.

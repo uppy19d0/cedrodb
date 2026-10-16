@@ -241,6 +241,45 @@ function agentRecord(checkpoint) {
   };
 }
 
+function statsRecord(result) {
+  return {
+    version: result.version, records: result.records, collections: result.collections,
+    contentBytes: result.content_bytes, logBytes: result.log_bytes,
+    latestCursor: result.latest_cursor, indexes: result.indexes,
+  };
+}
+
+function queryPage(page) {
+  return {
+    records: page.records, nextAfter: page.next_after ?? undefined,
+    scanned: page.scanned, usedIndex: page.used_index ?? undefined,
+  };
+}
+
+function searchPage(page) {
+  return {
+    hits: page.hits.map((hit) => ({
+      key: hit.key, value: hit.value, score: hit.score,
+      vectorScore: hit.vector_score, textScore: hit.text_score,
+    })),
+    scanned: page.scanned, matched: page.matched, usedIndex: page.used_index ?? undefined, mode: page.mode,
+  };
+}
+
+function profilePlan(plan) {
+  return {
+    collectionRecords: plan.collection_records, candidateRecords: plan.candidate_records,
+    scanned: plan.scanned, returned: plan.returned, usedIndex: plan.used_index ?? undefined,
+  };
+}
+
+function operationMetrics(metrics) {
+  return {
+    attempts: metrics.attempts, successes: metrics.successes, failures: metrics.failures,
+    totalElapsedMicros: metrics.total_elapsed_micros, maxElapsedMicros: metrics.max_elapsed_micros,
+  };
+}
+
 class Database {
   #native;
 
@@ -291,12 +330,26 @@ class Database {
     return { transactions: page.transactions, nextCursor: page.next_cursor, hasMore: page.has_more };
   }
 
-  stats() {
-    const result = JSON.parse(this.#native.stats());
+  stats() { return statsRecord(JSON.parse(this.#native.stats())); }
+
+  diagnostics() {
+    const report = JSON.parse(this.#native.diagnostics());
     return {
-      version: result.version, records: result.records, collections: result.collections,
-      contentBytes: result.content_bytes, logBytes: result.log_bytes,
-      latestCursor: result.latest_cursor, indexes: result.indexes,
+      stats: statsRecord(report.stats),
+      limits: {
+        maxDocumentBytes: report.limits.max_document_bytes,
+        maxFrameBytes: report.limits.max_frame_bytes,
+        maxStateBytes: report.limits.max_state_bytes,
+      },
+      collections: report.collections.map((collection) => ({
+        collection: collection.collection, records: collection.records,
+        contentBytes: collection.content_bytes, indexFields: collection.index_fields,
+      })),
+      session: {
+        query: operationMetrics(report.session.query), search: operationMetrics(report.session.search),
+        commit: operationMetrics(report.session.commit),
+      },
+      poisoned: report.poisoned, writerActive: report.writer_active,
     };
   }
 
@@ -310,13 +363,17 @@ class Database {
 
   _search(collection, query) {
     const page = JSON.parse(this.#native.searchJson(collection, normalizeSearch(query)));
-    return {
-      hits: page.hits.map((hit) => ({
-        key: hit.key, value: hit.value, score: hit.score,
-        vectorScore: hit.vector_score, textScore: hit.text_score,
-      })),
-      scanned: page.scanned, matched: page.matched, usedIndex: page.used_index ?? undefined, mode: page.mode,
-    };
+    return searchPage(page);
+  }
+
+  _profileQuery(collection, query) {
+    const profile = JSON.parse(this.#native.profileQueryJson(collection, normalizeQuery(query)));
+    return { page: queryPage(profile.page), elapsedMicros: profile.elapsed_micros, plan: profilePlan(profile.plan) };
+  }
+
+  _profileSearch(collection, query) {
+    const profile = JSON.parse(this.#native.profileSearchJson(collection, normalizeSearch(query)));
+    return { page: searchPage(profile.page), elapsedMicros: profile.elapsed_micros, plan: profilePlan(profile.plan) };
   }
 
   _get(collection, key) {
@@ -326,7 +383,7 @@ class Database {
 
   _findPage(collection, query) {
     const page = JSON.parse(this.#native.findPage(collection, normalizeQuery(query)));
-    return { records: page.records, nextAfter: page.next_after ?? undefined, scanned: page.scanned, usedIndex: page.used_index ?? undefined };
+    return queryPage(page);
   }
 
   _createIndex(collection, field) { this.#native.createIndex(collection, string(field, 'field')); }
@@ -367,6 +424,8 @@ class Collection {
   find(query = {}) { return this.findPage(query).records; }
   findPage(query = {}) { return this.#database._findPage(this.#name, query); }
   search(query) { return this.#database._search(this.#name, query); }
+  profileQuery(query = {}) { return this.#database._profileQuery(this.#name, query); }
+  profileSearch(query) { return this.#database._profileSearch(this.#name, query); }
   createIndex(field) { this.#database._createIndex(this.#name, field); }
   compareExchange(key, expected, replacement) { return this.#database._compareExchange(this.#name, key, expected, replacement); }
   aggregate(field) { return this.#database._aggregate(this.#name, field); }
@@ -521,4 +580,4 @@ class Queue {
   }
 }
 
-module.exports = { Database, Collection, Queue, AgentStore, version: '0.6.0' };
+module.exports = { Database, Collection, Queue, AgentStore, version: '0.7.0' };

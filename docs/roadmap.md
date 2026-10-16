@@ -9,8 +9,8 @@ Each release must solve a concrete application problem, describe failures and pa
 | 0.4 | Reserve stock only when every dependency is unchanged | Conditional multi-document batches, conflict and concurrent-contender tests |
 | 0.5 | Resume interrupted local background jobs | Durable leases, scheduling, bounded retries, stale-worker fencing, dead letters |
 | 0.6 | Preserve agent state and retrieve local memory | Revision-fenced atomic checkpoints, exact text/vector/hybrid retrieval, prefilter and numerical-recovery tests |
-| 0.7 planned | Connect real agent frameworks and establish failure behavior | Adapter conformance, versioned serialization, I/O fault injection and interruption/fuzz reproductions |
-| 0.8 planned | Make measured performance decisions | Published latency/RSS/recovery workloads and methodology |
+| 0.7 | Inspect query work and diagnose local performance | Session counters, execution profiles, actual scan/index plans and isolated benchmark correctness checks |
+| 0.8 planned | Validate integrations, failures and performance limits | Framework adapter conformance, I/O fault injection, interruption/fuzz reproductions and representative latency/RSS/recovery workloads |
 | 0.9 planned | Exercise compatibility contracts | Format/API review, upgrade matrix, restore drills and migration notes |
 | 1.0 candidate | Support a stable contract | All gates below, with evidence and a maintenance policy |
 

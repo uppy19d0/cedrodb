@@ -1,6 +1,42 @@
-# Comparación reproducible prevista
+# Herramientas de rendimiento y comparaciones
 
-No hay cifras de rendimiento publicadas todavía. Esta guía define las condiciones necesarias para una comparación útil.
+## Medir CedroDB 0.7 en tu equipo
+
+La distribución Python incluye un diagnóstico del runtime y un benchmark que
+crea una base temporal independiente de tus datos:
+
+```sh
+python -m cedrodb doctor
+python -m cedrodb benchmark --records 1000 --iterations 30
+python -m cedrodb benchmark --records 10000 --iterations 100 > benchmark.json
+```
+
+El benchmark compara consultas y búsqueda híbrida con y sin un índice de
+igualdad. Verifica los documentos, puntuaciones y orden de resultados antes de
+informar las medidas; también verifica integridad y cantidad tras reabrir.
+Registra tamaño, lotes, calentamiento, versiones, sistema, CPU/arquitectura,
+durabilidad, tiempo nativo y tiempo de llamada completa de Python. Incluye
+latencias de lotes, construcción de índice y reapertura. Los vectores son
+sintéticos y no miden calidad de respuestas de IA.
+
+Los percentiles son resúmenes empíricos por rango más próximo; con pocas
+muestras P99 puede ser simplemente el máximo observado. La herramienta no
+controla cachés del sistema, no mide RSS/CPU y no realiza una comparación con
+otros motores. `content_bytes` mide contenido codificado, no memoria física.
+Registra hardware/disco/sistema de archivos por separado si vas a compartir un
+informe. El tiempo usa el [contador de rendimiento de Python](https://docs.python.org/3/library/time.html#time.perf_counter_ns)
+en el límite del SDK y `Instant` dentro del núcleo.
+
+Para investigar una aplicación abierta, consulta los [diagnósticos y perfiles](performance.md).
+Un índice puede reducir candidatos sin reducir la latencia en la misma
+proporción: devolver documentos, puntuar, ordenar y convertir JSON sigue
+costando trabajo. No conviertas una reducción de filas visitadas en una cifra
+inventada de aceleración.
+
+## Comparación entre motores pendiente
+
+No hay comparaciones publicadas que demuestren superioridad frente a otros
+motores. Estas son las condiciones necesarias para una comparación útil.
 
 ## Motores de referencia
 

@@ -46,7 +46,7 @@ pub struct ChangePage {
     pub has_more: bool,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Stats {
     pub version: String,
     pub records: u64,
@@ -179,21 +179,25 @@ impl Database {
 
     pub fn stats(&self) -> Result<Stats> {
         let inner = self.lock()?;
-        Ok(Stats {
-            version: env!("CARGO_PKG_VERSION").into(),
-            records: inner
-                .state
-                .collections
-                .values()
-                .map(|documents| documents.len() as u64)
-                .sum(),
-            collections: inner.state.collections.len() as u64,
-            content_bytes: inner.state.content_bytes as u64,
-            log_bytes: inner.file.metadata()?.len(),
-            latest_cursor: inner.frame_offsets.len() as u64,
-            indexes: inner.state.indexes.len() as u64,
-        })
+        stats_from_inner(&inner)
     }
+}
+
+pub(super) fn stats_from_inner(inner: &Inner) -> Result<Stats> {
+    Ok(Stats {
+        version: env!("CARGO_PKG_VERSION").into(),
+        records: inner
+            .state
+            .collections
+            .values()
+            .map(|documents| documents.len() as u64)
+            .sum(),
+        collections: inner.state.collections.len() as u64,
+        content_bytes: inner.state.content_bytes as u64,
+        log_bytes: inner.file.metadata()?.len(),
+        latest_cursor: inner.frame_offsets.len() as u64,
+        indexes: inner.state.indexes.len() as u64,
+    })
 }
 
 fn read_batch(file: &mut File, offset: u64, options: Options) -> Result<Batch> {

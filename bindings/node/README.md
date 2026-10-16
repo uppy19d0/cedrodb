@@ -2,30 +2,36 @@
 
 A small embedded document database powered by the CedroDB Rust engine through N-API. Store JSON locally, commit related changes together, query indexed fields, and replay durable transactions without running a database server.
 
-**Experimental 0.6 release.** CedroDB keeps active documents in memory and persists a checksummed transaction log. Capabilities include exact local text/vector retrieval, revision-protected agent checkpoints, durable local job queues, guarded transactions and verified backups. It is intended for evaluation, local tools and applications whose storage limits fit the documented memory model.
+**Experimental 0.7 release.** CedroDB keeps active documents in memory and persists a checksummed transaction log. Capabilities include query diagnostics/profiles, exact local text/vector retrieval, revision-protected agent checkpoints, durable local job queues, guarded transactions and verified backups. It is intended for evaluation, local tools and applications whose storage limits fit the documented memory model.
 
 [Project](https://github.com/uppy19d0/cedrodb) · [Architecture](https://github.com/uppy19d0/cedrodb/blob/main/docs/architecture.md) · [Backup and recovery](https://github.com/uppy19d0/cedrodb/blob/main/docs/backups.md) · [Python API](https://github.com/uppy19d0/cedrodb/tree/main/bindings/python) · [Interactive demo](https://www.ltavarez.me/labs/cedrodb)
 
 ## Install
 
 ```sh
-npm install cedrodb@0.6.0
+npm install cedrodb@0.7.0
 ```
 
 Requires **Node.js 18 or newer**. ESM, CommonJS and TypeScript are supported; the package has no npm runtime dependencies.
 
-Release builds target these native binary layouts:
+Matching release binaries avoid a local Rust build:
 
 | Operating system | Architecture / runtime | Binary directory |
 | --- | --- | --- |
 | macOS | Apple Silicon ARM64 | `prebuilds/darwin-arm64` |
 | macOS | Intel x64 | `prebuilds/darwin-x64` |
-| Linux | x64, GNU libc | `prebuilds/linux-x64-gnu` |
+| Linux | x64, glibc 2.34 or newer | `prebuilds/linux-x64-gnu` |
 | Windows | x64, MSVC | `prebuilds/win32-x64-msvc` |
 
-Installation loads a matching bundled binary when one is present. Otherwise it compiles the included Rust sources, requiring **Rust 1.88+, Cargo and a platform C linker**. Linux musl is detected separately and never loads a GNU libc binary; architectures outside the release targets require a source build and are not covered by the prebuilt matrix. The package does not download an executable during installation.
+Installation loads a compatible bundled binary when one is present. If none loads, the install script builds the included Rust sources. Source builds require **Rust 1.88+, Cargo and a platform C linker**: Xcode Command Line Tools on macOS, a C development toolchain on Linux, or MSVC Build Tools on Windows. Rust is not required at runtime when a matching prebuilt binary loads.
 
-If installation scripts are disabled, a matching prebuilt binary must be present. To build a missing binary after installing the toolchain, run `npm rebuild cedrodb`.
+Linux musl is detected separately and never loads a glibc binary. Other operating systems, CPU architectures and libc combinations have no prebuilt compatibility guarantee; a source build is an application-side evaluation, not a tested release target. This native Node package does not support browsers, Android or iOS. It does not download another executable during installation.
+
+If installation scripts are disabled, a matching prebuilt binary must already be included. After installing a missing build toolchain, retry compilation with:
+
+```sh
+npm rebuild cedrodb
+```
 
 ## Quick start
 
@@ -65,7 +71,45 @@ try {
 | Local workers and automation | Durable jobs, leases, retries and atomic acknowledgment with results | Run the worker loop, provide a suitable clock and make external effects idempotent |
 | Local AI assistants and retrieval tools | Exact search, revision-protected checkpoints and atomic checkpoint/result writes | Generate embeddings, select the model/tenant, validate messages and control execution |
 | Device state and worker checkpoints | Compare-and-exchange, persisted history | Scheduling, retries and business rules |
+| Diagnose a bounded local workload | Session metrics, collection diagnostics and query/search profiles | Measure representative workloads and choose useful indexes |
 | Node.js and Python utilities sharing local data | The same Rust engine and on-disk format | Open the directory sequentially; use portable JSON numbers |
+
+## Diagnostics and query profiles
+
+Inspect configured limits, encoded content, session indexes and native operation counters without writing records:
+
+```js
+const report = db.diagnostics();
+console.table(report.collections);
+console.log(report.limits, report.poisoned, report.writerActive);
+console.table(report.session);
+
+const inspections = db.collection('inspections');
+const query = {
+  filters: [{ field: 'state', op: 'eq', value: 'pending' }],
+  limit: 50,
+};
+const before = inspections.profileQuery(query);
+inspections.createIndex('state');
+const after = inspections.profileQuery(query);
+console.log({ before: before.plan, after: after.plan });
+console.log(after.elapsedMicros, after.page.records);
+
+const searchProfile = db.collection('knowledge').profileSearch({
+  text: 'backups',
+  filters: [{ field: 'model', op: 'eq', value: 'synthetic-2d' }],
+  maxScanned: 1000,
+});
+console.log(searchProfile.elapsedMicros, searchProfile.plan, searchProfile.page.hits);
+```
+
+`diagnostics()` returns `{ stats, limits, collections, session, poisoned, writerActive }`. Each collection reports its name, record count, encoded `contentBytes` and session `indexFields`. Limits are `maxDocumentBytes`, `maxFrameBytes` and `maxStateBytes`; they do not describe total process RAM. `session` contains `query`, `search` and `commit` counters with `attempts`, `successes`, `failures`, `totalElapsedMicros` and `maxElapsedMicros`. Counters and indexes reset when the database is reopened. Counters observed during concurrent calls are not one atomic snapshot across all operations.
+
+`profileQuery()` and `profileSearch()` execute the operation once and return `{ page, elapsedMicros, plan }`. `page` has exactly the ordinary query/search result shape. `plan` contains `collectionRecords`, `candidateRecords`, `scanned`, `returned` and optional `usedIndex`. Candidates reflect the selected equality index; query candidates also exclude keys at or before `after`. Query scan counts include pagination lookahead, so `scanned` can exceed `returned` even when an index is used. Search retains its full ranking and scan-budget rules; a failed operation throws instead of returning a partial profile.
+
+Elapsed microseconds are measured inside the Rust engine, including query/search lock wait, planning, scanning, ranking and cloning the result. They exclude SDK JSON conversion and application work, and may be zero for short calls. Profiles count one query/search attempt, just like ordinary queries/searches. Core validation failures count; inputs rejected by JavaScript or its native JSON bridge before engine invocation do not. Commit counters cover nonempty commit attempts, including failures inside that commit path; they exclude earlier input/staging failures, condition/revision conflicts and empty batches. Commit timings exclude lock wait. These counters are diagnostics, not a complete API-call audit trail.
+
+Run [diagnostics.mjs](https://github.com/uppy19d0/cedrodb/blob/main/bindings/node/examples/diagnostics.mjs) against an existing directory to print a report. It performs no record writes; ordinary database opening can still recover an incomplete final append. A newly opened inspection handle starts with zero session counters, so inspect a running application's handle for live workload metrics. [profile-indexes.mjs](https://github.com/uppy19d0/cedrodb/blob/main/bindings/node/examples/profile-indexes.mjs) creates a fresh synthetic dataset and prints actual timings and candidate counts before/after an equality index. It checks identical results and makes no benchmark or speedup guarantee.
 
 ## Local retrieval and agent checkpoints
 
@@ -350,13 +394,16 @@ Verification and backup hold the database lock and replay documents into additio
 | `collection.aggregate(field)` | `{ count, sum, min, max }` over a top-level numeric field |
 | `db.changes({ since?, limit? })` | `{ transactions, nextCursor, hasMore }` |
 | `db.stats()` | Version, records, collections, contentBytes, logBytes, latestCursor, indexes |
+| `db.diagnostics()` | Stats, configured limits, collection/index details, session counters and status flags |
+| `collection.profileQuery(query?)` | `{ page, elapsedMicros, plan }` for one executed query |
+| `collection.profileSearch(query)` | `{ page, elapsedMicros, plan }` for one executed exact search |
 | `db.verify()` / `db.backup(path)` | `IntegrityReport` |
 | `Database.restoreBackup(file, newDirectory, options?)` | `IntegrityReport` |
 | `agent.get(threadId)` | Latest `AgentCheckpoint` or `undefined` |
 | `agent.checkpoint(threadId, state, options?)` | `{ applied, cursor, checkpoint }`; checkpoint and application writes commit together |
 | `db.close()` | Release the native handle and exclusive file lock; idempotent |
 
-Complete TypeScript declarations are included for both ESM and CommonJS, including typed `Queue`, `Job`, `LeasedJob`, `AgentStore`, `AgentCheckpoint` and `SearchPage` exports. Calls on retained collections, queues and agent stores fail after their database closes.
+Complete TypeScript declarations are included for both ESM and CommonJS, including typed `Queue`, `Job`, `LeasedJob`, `AgentStore`, `AgentCheckpoint`, `SearchPage`, `Diagnostics`, `QueryProfile` and `SearchProfile` exports. Profiles preserve the collection's declared document type. Calls on retained collections, queues and agent stores fail after their database closes.
 
 ## Python interoperability and JSON rules
 
@@ -373,13 +420,15 @@ Only plain JSON objects, dense standard arrays, strings, booleans, null and fini
 
 Structural equality ignores object property order. Exactly representable integral floats equal integers within the core's safe numeric range, including inside nested values; Python `1.0` can match JavaScript `1`. Booleans remain distinct from numbers. Decimal calculations retain normal IEEE 754 limitations. `aggregate()` uses floating-point arithmetic and supports a top-level field, not a nested JSON Pointer.
 
-## Limits and migration from 0.2 / 0.3 / 0.4 / 0.5
+## Limits and migration from 0.2–0.6
 
 The default limits are 1 MiB per document, 16 MiB per transaction frame and 64 MiB of encoded live content. Override them with `maxDocumentBytes`, `maxFrameBytes` and `maxStateBytes`. These are encoded-content limits, not a cap on total process RAM: all active documents, indexes, transaction offsets, results and verification replay consume memory. JSON nesting is limited to 64 levels.
 
 The append-only log has no compaction or retention yet. SQL, MVCC, automatic replication, encryption and concurrent multi-process ownership of a directory are not implemented. Do not edit, replace or remove an open database's log. There are no comparative benchmark claims against SQLite, MDBX or DuckDB.
 
 Version 0.3 added `verify()`, `backup()` and `Database.restoreBackup()`. Version 0.4 added `conditionalBatch()` for guarded changes across collections. Version 0.5 added the `Queue` API. Version 0.6 adds exact retrieval and revision-protected agent checkpoints with schema-versioned records stored through the same engine. These additions preserve the earlier document/query API and log format, so existing directories open directly. Ordinary opening still recovers an incomplete final append according to the engine's recovery rules; `verify()` is strict and never repairs a log. A backup container must be restored through the backup API rather than copied over a live log. Recreate session indexes after opening the restored directory, and resume the changefeed from a cursor belonging to that restored history.
+
+Version 0.7 adds `diagnostics()`, `profileQuery()` and `profileSearch()` without changing the on-disk format or existing query/search results. No data migration is required. Metrics describe only the current open session and are not saved in backups. Existing workloads do not acquire new persisted metadata.
 
 The `_cedro.jobs.` collection prefix became reserved in 0.5; `_cedro.agents.` becomes reserved in 0.6. Direct application writes to either prefix are rejected. If an earlier application used that prefix for its own collections, migrate queue-prefix records with version 0.4, or agent-prefix records with version 0.5, before enabling the corresponding feature under those names. Ordinary application collections retain their existing behavior.
 
@@ -396,6 +445,9 @@ node examples/offline-backup.mjs
 node examples/guarded-inventory.mjs
 node examples/local-worker.mjs
 node examples/agent-memory.mjs
+node examples/profile-indexes.mjs
+# Inspect the existing directory printed by an example:
+node examples/diagnostics.mjs /path/to/existing-database
 ```
 
 The build vendors only the core `Cargo.toml`, `Cargo.lock`, `src/` and license into `core/`. Packed packages include those sources plus locked Rust dependencies and build without a path outside the package. Build native artifacts separately for each platform; a successful source build on one platform does not establish compatibility with another.

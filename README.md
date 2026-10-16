@@ -4,9 +4,9 @@
 
 CedroDB is a Rust engine with native Node.js/TypeScript and Python libraries. Save an agent checkpoint and its document/outbox writes in one transaction, reject stale checkpoint revisions, and retrieve local memory using text, supplied embeddings or both. Documents, jobs, backups and a durable changefeed share one storage format.
 
-**0.6.0 is experimental.** We are approaching 1.0 through incremental, tested releases. The engine is not production validated; there are no superiority claims against SQLite, MDBX, UnQLite or DuckDB.
+**0.7.0 is experimental.** We are approaching 1.0 through incremental, tested releases. The engine is not production validated; there are no superiority claims against SQLite, MDBX, UnQLite or DuckDB.
 
-[Agents and retrieval](docs/agents.md) · [Research](docs/ai-research.md) · [Node API](bindings/node/README.md) · [Python API](bindings/python/README.md) · [Backups](docs/backups.md) · [Recipes](docs/use-cases.md) · [Local jobs](docs/jobs.md) · [Changelog](CHANGELOG.md) · [Road to 1.0](docs/roadmap.md) · [Live examples](https://www.ltavarez.me/labs/cedrodb)
+[Performance tools](docs/performance.md) · [Installation guide](docs/installation.md) · [Agents and retrieval](docs/agents.md) · [Research](docs/ai-research.md) · [Node API](bindings/node/README.md) · [Python API](bindings/python/README.md) · [Backups](docs/backups.md) · [Recipes](docs/use-cases.md) · [Local jobs](docs/jobs.md) · [Changelog](CHANGELOG.md) · [Road to 1.0](docs/roadmap.md) · [Live examples](https://www.ltavarez.me/labs/cedrodb)
 
 ## Application fit
 
@@ -23,19 +23,50 @@ One open handle owns a database directory. Operations within it serialize throug
 
 ## Install
 
-Install Node.js from [npm](https://www.npmjs.com/package/cedrodb/v/0.6.0):
+Install Node.js from [npm](https://www.npmjs.com/package/cedrodb/v/0.7.0):
 
 ```sh
-npm install cedrodb@0.6.0
+npm install cedrodb@0.7.0
 ```
 
-Install Python from [PyPI](https://pypi.org/project/cedrodb/0.6.0/). Pip selects a compatible wheel when available; direct release downloads remain available from [the platform selector](https://www.ltavarez.me/labs/cedrodb).
+Install Python from [PyPI](https://pypi.org/project/cedrodb/0.7.0/). Pip selects a compatible wheel when available; direct release downloads remain available from [the platform selector](https://www.ltavarez.me/labs/cedrodb).
 
 ```sh
-python -m pip install cedrodb==0.6.0
+python -m pip install cedrodb==0.7.0
 ```
 
 Python supports 3.9+; its source distribution needs Rust 1.85+ and a platform linker. Node supports 18+, includes binaries for macOS ARM64/x64, Linux x64 with compatible glibc and Windows x64, and needs Rust 1.88+ for its source fallback. [Distribution details](docs/native-libraries.md).
+
+## Diagnose queries and memory retrieval
+
+Inspect the live owner handle, then execute a query with an actual plan and native timing:
+
+```python
+report = db.diagnostics()
+profile = db.collection('support-memory').profile_search(
+    text='refund policy',
+    filters=[{'field': 'tenant', 'op': 'eq', 'value': 'shop-1'}],
+)
+print(profile['elapsed_micros'], profile['plan'])
+print(report['session'])
+```
+
+The Node equivalents are `db.diagnostics()`, `collection.profileQuery(options)` and
+`collection.profileSearch(options)`. Profiles include the ordinary result page;
+they execute once and do not append a log transaction. Session counters cover
+queries, searches and nonempty shared commit attempts; they reset on reopening.
+
+Run the included Python tools against an isolated temporary workload:
+
+```sh
+python -m cedrodb doctor
+python -m cedrodb benchmark --records 1000 --iterations 30
+```
+
+The benchmark checks result equality before reporting timings, compares actual
+scan work with/without an equality index, and records native/SDK latency samples,
+batch writes, index construction and reopening. It opens no application database.
+[Metric definitions, monitoring and methodology](docs/performance.md).
 
 ## Save a document and its event together
 
@@ -111,7 +142,7 @@ with Database('./assistant.cedro') as db:
 
 A stale revision changes neither the checkpoint nor its outbox writes. Text search uses BM25, vector search uses exact cosine similarity, and hybrid search combines both rankings using reciprocal rank fusion. Filters run before scoring; equality indexes can narrow the scan. Exceeding the scan budget returns an error rather than a partial top-k. Your application supplies embeddings; CedroDB makes no model or network calls. [Full contracts and boundaries](docs/agents.md).
 
-## Features in 0.6
+## Features in 0.7
 
 - JSON documents, explicit collection/key names and atomic cross-collection batches.
 - Versioned append-only frames with length checks, CRC32 and `sync_all` before changes become visible.
@@ -125,6 +156,8 @@ A stale revision changes neither the checkpoint nor its outbox writes. Text sear
 - Scoped agent checkpoints with revision checks and atomic document/outbox operations.
 - Text/BM25, exact vector/cosine and hybrid/RRF retrieval with metadata prefilters, deterministic ties and explicit scan budgets.
 - Exact floating-point parsing across replay, backups and SDK JSON boundaries.
+- Collection/index inventory, content limits, session counters and query/search profiles with actual candidate/scan work.
+- Isolated Python benchmark and runtime diagnostic commands.
 - Native SDKs, TypeScript ESM/CommonJS types, Python type hints and shared Node/Python storage.
 
 Indexes are session-local: recreate them after opening. Separate calls/pages do not share a snapshot. APIs are synchronous; use a worker for disk-heavy work when the application's main thread must stay responsive.

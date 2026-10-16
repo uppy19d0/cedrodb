@@ -251,6 +251,76 @@ pub(crate) fn validate_filters(filters: &[Filter], options: Options) -> Result<(
     Ok(())
 }
 
+/// Query and search share the same equality-index choice and cursor range.
+/// Counting a BTree range after a cursor requires traversal; only profilers
+/// request that extra work, preserving ordinary limited-query complexity.
+pub(super) struct CandidateSelection<'a> {
+    pub records: Box<dyn Iterator<Item = (&'a String, &'a Document)> + 'a>,
+    pub collection_records: u64,
+    pub candidate_records: u64,
+    pub used_index: Option<String>,
+}
+
+pub(super) fn select_candidates<'a>(
+    state: &'a State,
+    collection: &str,
+    filters: &[Filter],
+    after: Option<&'a str>,
+    count_candidates: bool,
+) -> CandidateSelection<'a> {
+    let Some(documents) = state.collections.get(collection) else {
+        return CandidateSelection {
+            records: Box::new(std::iter::empty()),
+            collection_records: 0,
+            candidate_records: 0,
+            used_index: None,
+        };
+    };
+    let selected_index = filters
+        .iter()
+        .filter(|filter| filter.op == FilterOp::Eq)
+        .filter_map(|filter| {
+            state
+                .indexes
+                .get(&(collection.to_owned(), filter.field.clone()))
+                .map(|index| (filter, index.get(&index_token(&filter.value))))
+        })
+        .min_by_key(|(_, keys)| keys.map_or(0, BTreeSet::len));
+    let mut selection = CandidateSelection {
+        records: Box::new(std::iter::empty()),
+        collection_records: documents.len() as u64,
+        candidate_records: 0,
+        used_index: None,
+    };
+    if let Some((filter, keys)) = selected_index {
+        selection.used_index = Some(filter.field.clone());
+        if let Some(keys) = keys {
+            let keys: Box<dyn Iterator<Item = &String>> = if let Some(after) = after {
+                let range = keys.range::<str, _>((Excluded(after), Unbounded));
+                if count_candidates {
+                    selection.candidate_records = range.clone().count() as u64;
+                }
+                Box::new(range)
+            } else {
+                selection.candidate_records = keys.len() as u64;
+                Box::new(keys.iter())
+            };
+            selection.records =
+                Box::new(keys.filter_map(|key| documents.get(key).map(|document| (key, document))));
+        }
+    } else if let Some(after) = after {
+        let range = documents.range::<str, _>((Excluded(after), Unbounded));
+        if count_candidates {
+            selection.candidate_records = range.clone().count() as u64;
+        }
+        selection.records = Box::new(range);
+    } else {
+        selection.candidate_records = documents.len() as u64;
+        selection.records = Box::new(documents.iter());
+    }
+    selection
+}
+
 impl Database {
     /// Build a handle-local equality index. Recreate indexes after reopening.
     /// Index allocations are additional to Options::max_state_bytes.
@@ -286,6 +356,33 @@ impl Database {
     /// Equality is recursive JSON equality; integer/float values interoperate
     /// exactly within +/-2^53, including 1 == 1.0 and -0.0 == 0.
     pub fn query(&self, collection: &str, query: Query) -> Result<QueryPage> {
+        let timer = self.metrics.query.start();
+        let result = self
+            .run_query(collection, query, false)
+            .map(|(page, _)| page);
+        timer.finish(result.is_ok());
+        result
+    }
+
+    /// Execute the real query once and include its plan from the same locked
+    /// state. Timing includes validation, lock wait, page creation and plan work.
+    pub fn profile_query(&self, collection: &str, query: Query) -> Result<QueryProfile> {
+        let timer = self.metrics.query.start();
+        let result = self.run_query(collection, query, true);
+        let elapsed_micros = timer.finish(result.is_ok());
+        result.map(|(page, plan)| QueryProfile {
+            page,
+            elapsed_micros,
+            plan,
+        })
+    }
+
+    fn run_query(
+        &self,
+        collection: &str,
+        query: Query,
+        profile: bool,
+    ) -> Result<(QueryPage, ProfilePlan)> {
         validate_collection(collection)?;
         if !(1..=1000).contains(&query.limit) {
             return Err(Error::InvalidInput("query limit must be 1..=1000".into()));
@@ -301,46 +398,20 @@ impl Database {
             scanned: 0,
             used_index: None,
         };
-        let Some(documents) = inner.state.collections.get(collection) else {
-            return Ok(page);
+        let candidates = select_candidates(
+            &inner.state,
+            collection,
+            &query.filters,
+            query.after.as_deref(),
+            profile,
+        );
+        page.used_index = candidates.used_index.clone();
+        let mut plan = ProfilePlan {
+            collection_records: candidates.collection_records,
+            candidate_records: candidates.candidate_records,
+            used_index: candidates.used_index,
+            ..ProfilePlan::default()
         };
-        let selected_index = query
-            .filters
-            .iter()
-            .filter(|filter| filter.op == FilterOp::Eq)
-            .filter_map(|filter| {
-                inner
-                    .state
-                    .indexes
-                    .get(&(collection.to_owned(), filter.field.clone()))
-                    .map(|index| (filter, index.get(&index_token(&filter.value))))
-            })
-            .min_by_key(|(_, keys)| keys.map_or(0, BTreeSet::len));
-        let candidates: Box<dyn Iterator<Item = (&String, &Document)> + '_> =
-            if let Some((filter, keys)) = selected_index {
-                page.used_index = Some(filter.field.clone());
-                match keys {
-                    Some(keys) => {
-                        let keys: Box<dyn Iterator<Item = &String>> = if let Some(after) =
-                            &query.after
-                        {
-                            Box::new(keys.range::<str, _>((Excluded(after.as_str()), Unbounded)))
-                        } else {
-                            Box::new(keys.iter())
-                        };
-                        Box::new(
-                            keys.filter_map(|key| {
-                                documents.get(key).map(|document| (key, document))
-                            }),
-                        )
-                    }
-                    None => Box::new(std::iter::empty()),
-                }
-            } else if let Some(after) = &query.after {
-                Box::new(documents.range::<str, _>((Excluded(after.as_str()), Unbounded)))
-            } else {
-                Box::new(documents.iter())
-            };
         // An equality index excludes nonmatching documents before evaluation.
         // Give plain scans the same behavior: eliminate documents using all
         // non-ordering predicates before evaluating potentially unsupported
@@ -353,7 +424,7 @@ impl Database {
                 !matches!(filter.op, FilterOp::Eq | FilterOp::Ne | FilterOp::Exists)
             }))
             .collect();
-        for (key, document) in candidates {
+        for (key, document) in candidates.records {
             page.scanned += 1;
             let mut matches = true;
             for filter in &evaluation_filters {
@@ -374,6 +445,8 @@ impl Database {
                 value: document.value.clone(),
             });
         }
-        Ok(page)
+        plan.scanned = page.scanned;
+        plan.returned = page.records.len() as u64;
+        Ok((page, plan))
     }
 }

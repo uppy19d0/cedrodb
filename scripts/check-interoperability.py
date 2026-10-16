@@ -52,10 +52,16 @@ def main():
             hits = database.collection("memory").search(text="refund", vector=[exact, 1.0], min_vector_score=0.99,
                 filters=[{"field":"model", "op":"eq", "value":"demo"}])
             assert hits["scanned"] == 1 and [hit["key"] for hit in hits["hits"]] == ["policy"]
+            profile = database.collection("memory").profile_search(text="refund", vector=[exact, 1.0],
+                min_vector_score=0.99, filters=[{"field":"model", "op":"eq", "value":"demo"}])
+            assert profile["page"] == hits and profile["plan"]["candidate_records"] == 1
+            assert profile["plan"]["used_index"] == "model"
+            assert database.diagnostics()["session"]["search"]["successes"] == 2
     print(json.dumps({"interop": "passed", "python_to_node": True, "node_to_python": True,
                       "numeric_cas": True, "unsafe_js_integer_rejected": True,
                       "agent_revision_fencing": True, "atomic_agent_results": True,
-                      "hybrid_memory": True, "exact_float_roundtrip": True}))
+                      "hybrid_memory": True, "exact_float_roundtrip": True,
+                      "native_profiles": True, "session_metrics": True}))
 
 
 if __name__ == "__main__":

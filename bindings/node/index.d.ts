@@ -47,6 +47,22 @@ export interface Stats {
   version: string; records: number; collections: number; contentBytes: number;
   logBytes: number; latestCursor: number; indexes: number;
 }
+export interface OperationMetrics {
+  attempts: number; successes: number; failures: number;
+  totalElapsedMicros: number; maxElapsedMicros: number;
+}
+export interface SessionMetrics { query: OperationMetrics; search: OperationMetrics; commit: OperationMetrics }
+export interface ContentLimits { maxDocumentBytes: number; maxFrameBytes: number; maxStateBytes: number }
+export interface CollectionDiagnostics { collection: string; records: number; contentBytes: number; indexFields: string[] }
+export interface Diagnostics {
+  stats: Stats; limits: ContentLimits; collections: CollectionDiagnostics[];
+  session: SessionMetrics; poisoned: boolean; writerActive: boolean;
+}
+export interface ProfilePlan {
+  collectionRecords: number; candidateRecords: number; scanned: number; returned: number; usedIndex?: string;
+}
+export interface QueryProfile<T extends JsonValue = JsonValue> { page: QueryPage<T>; elapsedMicros: number; plan: ProfilePlan }
+export interface SearchProfile<T extends JsonValue = JsonValue> { page: SearchPage<T>; elapsedMicros: number; plan: ProfilePlan }
 export interface Aggregate { count: number; sum: number; min: number | null; max: number | null }
 /** Verified persisted log contents; counters exclude session indexes. */
 export interface IntegrityReport { logBytes: number; transactions: number; records: number; contentBytes: number }
@@ -101,6 +117,8 @@ export class Database {
   /** since is an exclusive durable transaction cursor; limits count transactions. */
   changes(options?: { since?: number; limit?: number }): ChangePage;
   stats(): Stats;
+  /** Inspect content limits, collection indexes and counters for this open session without writing records. */
+  diagnostics(): Diagnostics;
   /** Strictly verify every persisted frame without modifying or repairing the log. */
   verify(): IntegrityReport;
   /** Write a verified backup container to a new file. Existing files are rejected. */
@@ -119,6 +137,10 @@ export class Collection<T extends JsonValue = JsonValue> {
   findPage(query?: Query): QueryPage<T>;
   /** Exact bounded cosine/BM25/hybrid retrieval. Exceeding maxScanned throws instead of truncating. */
   search(query: SearchQuery): SearchPage<T>;
+  /** Execute one query and report its native elapsed microseconds and candidate/scan counts. */
+  profileQuery(query?: Query): QueryProfile<T>;
+  /** Execute one exact search and report its native elapsed microseconds and candidate/scan counts. */
+  profileSearch(query: SearchQuery): SearchProfile<T>;
   /** Session index; recreate after reopening. Equality filters can use it. */
   createIndex(field: string): void;
   /** undefined expected means absent; undefined replacement deletes the record. */
@@ -150,4 +172,4 @@ export class AgentStore<T extends JsonValue = JsonValue> {
   /** Save state and optional application writes in one transaction; conflicts return current checkpoint. */
   checkpoint(threadId: string, state: T, options?: CheckpointOptions): CheckpointResult<T>;
 }
-export const version: '0.6.0';
+export const version: '0.7.0';

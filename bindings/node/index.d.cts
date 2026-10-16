@@ -23,6 +23,14 @@ declare namespace cedrodb {
   type ChangeTransaction = API.ChangeTransaction;
   type ChangePage = API.ChangePage;
   type Stats = API.Stats;
+  type OperationMetrics = API.OperationMetrics;
+  type SessionMetrics = API.SessionMetrics;
+  type ContentLimits = API.ContentLimits;
+  type CollectionDiagnostics = API.CollectionDiagnostics;
+  type Diagnostics = API.Diagnostics;
+  type ProfilePlan = API.ProfilePlan;
+  type QueryProfile<T extends API.JsonValue = API.JsonValue> = API.QueryProfile<T>;
+  type SearchProfile<T extends API.JsonValue = API.JsonValue> = API.SearchProfile<T>;
   type Aggregate = API.Aggregate;
   type IntegrityReport = API.IntegrityReport;
   type JobStatus = API.JobStatus;

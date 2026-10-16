@@ -22,38 +22,131 @@ has one owning handle/process, and the log currently has no compaction. See the
 limits below before choosing it for important data. There are no performance
 claims or production-readiness guarantees.
 
-## Installation
+## Install on your operating system
 
-For the 0.6.0 release on PyPI:
+Use CPython 3.9+ in a virtual environment. These commands use the environment's
+interpreter directly, so activation and shell execution-policy changes are unnecessary.
 
-```sh
-python -m pip install cedrodb==0.6.0
-```
-
-If a version is not listed on PyPI, obtain its wheel or self-contained source
-archive from [GitHub Releases](https://github.com/uppy19d0/cedrodb/releases), then
-install the downloaded file:
+**macOS / Linux**
 
 ```sh
-python -m pip install ./cedrodb-0.6.0.tar.gz
+python3 -m venv .venv
+.venv/bin/python -m pip install cedrodb==0.7.0
+.venv/bin/python -m cedrodb doctor
 ```
 
-A compatible wheel needs no Rust toolchain at runtime. Source installation
-requires Python 3.9+, Rust 1.85+ and a working C linker. The source archive bundles
-the Rust core; it builds independently of the repository.
+**Windows PowerShell** (64-bit CPython)
 
-The release wheel build matrix covers four platform/architecture combinations:
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install cedrodb==0.7.0
+.\.venv\Scripts\python.exe -m cedrodb doctor
+```
 
-| Platform | Architecture | Python ABI |
+With an environment already selected, the installation command is simply:
+
+```sh
+python -m pip install cedrodb==0.7.0
+```
+
+`doctor` prints JSON containing the actual interpreter, architecture and package
+version after loading the native extension. It opens no database. If your command
+is `python3` or an environment-specific path, use that same command consistently.
+
+| System / CPU | Native wheel | Requirement |
 | --- | --- | --- |
-| Linux | x86_64 | CPython 3.9+ (`cp39-abi3`) |
-| macOS | Apple Silicon / ARM64 | CPython 3.9+ (`cp39-abi3`) |
-| macOS | Intel / x86_64 | CPython 3.9+ (`cp39-abi3`) |
-| Windows | x86_64 | CPython 3.9+ (`cp39-abi3`) |
+| Linux x86_64 | `manylinux_2_34_x86_64` | glibc 2.34+; standard CPython 3.9+ ABI |
+| macOS Apple Silicon | `macosx_11_0_arm64` | macOS 11+; ARM64 CPython |
+| macOS Intel | `macosx_10_12_x86_64` | Wheel tag 10.12+; compatible CPython runtime |
+| Windows x86_64 | `win_amd64` | 64-bit Windows CPython |
+| Linux ARM64, Alpine/musl, other CPUs | No included wheel | Source build may be possible; not part of the tested binary matrix |
+| Browser, iOS, Android | No supported native package | Use a compatible server/desktop runtime |
 
-Check a release's assets for its available builds and platform tags. Other
-architectures may require a source build; a Linux wheel does not imply support
-for every Linux distribution or musl-based system.
+The interpreter's architecture must match the wheel; an ARM64 machine running
+x86_64 Python uses an x86_64 wheel. Free-threaded Python, PyPy and mobile Python
+are outside the tested ABI matrix. A compatible wheel installs without Rust.
+To require a binary and fail clearly if none matches:
+
+```sh
+python -m pip install --only-binary=:all: cedrodb==0.7.0
+```
+
+A source build needs Python 3.9+, Rust 1.85+, Cargo and a platform C linker
+(Xcode command-line tools on macOS, a C toolchain on Linux, or compatible MSVC
+build tools on Windows). Source-build availability is not a support guarantee.
+The self-contained source archive bundles the Rust core:
+
+```sh
+python -m pip install ./cedrodb-0.7.0.tar.gz
+```
+
+Check [GitHub Releases](https://github.com/uppy19d0/cedrodb/releases) for actual
+assets and checksums. A missing package version, unavailable wheel, missing
+compiler and a database-lock error are different problems; changing database
+files does not fix installation. Keep the same Python interpreter for pip and execution.
+
+## Inspect performance and monitor a live application
+
+```python
+from cedrodb import Database
+
+with Database('./app.cedro') as db:
+    memory = db.collection('memory')
+    memory.put_many({
+        'a': {'tenant': 'shop-1', 'text': 'refund policy'},
+        'b': {'tenant': 'shop-2', 'text': 'shipping policy'},
+    })
+    filters = [{'field': 'tenant', 'op': 'eq', 'value': 'shop-1'}]
+    before = memory.profile_query(filters)
+    memory.create_index('tenant')
+    after = memory.profile_query(filters)
+    assert before['page']['records'] == after['page']['records']
+    print(before['plan'], after['plan'])
+    retrieval = memory.profile_search(text='refund', filters=filters)
+    print(retrieval['elapsed_micros'], retrieval['plan'])
+    print(db.diagnostics())
+```
+
+`profile_query(filters=None, *, limit=100, after=None)` and
+`profile_search(...)` execute once, returning `{page, elapsed_micros, plan}`.
+Search accepts exactly the same options as `search()`. The plan contains
+`collection_records`, `candidate_records`, `scanned`, `returned`, `used_index`.
+A keyset query may stop early, so candidate count and scanned count can differ.
+The returned `page` contains normal documents; redact it before exporting logs.
+
+`db.diagnostics()` returns `{stats, limits, collections, session, poisoned,
+writer_active}` without document values. Collection entries contain `collection`,
+`records`, `content_bytes`, `index_fields`. `session.query`, `.search`, `.commit`
+contain `attempts`, `successes`, `failures`, `total_elapsed_micros`,
+`max_elapsed_micros`. Encoded content bytes are not process RSS. Snapshots may
+race concurrent metric completions; there is no global wall-clock snapshot.
+
+Query/search timers include native validation and waiting for the engine mutex;
+commit timers start in the nonempty shared commit path and exclude waiting for
+that mutex. Python/JSON transport and external model calls are excluded. Calls
+rejected by Python validation never enter native counters. Commit metrics exclude
+conflicts, empty commits, and write errors rejected before the shared commit path.
+Metrics are handle-local, fixed-size and reset on reopening; no histogram or
+percentile is inferred from their totals.
+
+Run a fresh temporary workload with correctness checks and measured timings:
+
+```sh
+python -m cedrodb benchmark --records 1000 --iterations 30
+python -m cedrodb benchmark --records 10000 --iterations 100 > benchmark.json
+```
+
+The JSON report includes environment/workload settings, native and Python-call
+latency samples summarized with empirical nearest-rank p50/p95/p99, scan/index
+plans, batch writes, index build and reopen time. Small samples cannot establish
+tail-latency guarantees. Vectors are synthetic and no retrieval-quality claim is
+made. OS caches remain uncontrolled; results describe this machine/run. The tool
+opens no application database and removes its temporary database on exit.
+
+For periodic JSON snapshots, see
+[`examples/performance_monitor.py`](https://github.com/uppy19d0/cedrodb/blob/main/bindings/python/examples/performance_monitor.py).
+Sample the application's existing owner handle; a second process cannot open the
+same database concurrently. Choose your sampling interval and logging policy.
 
 ## Quickstart: save and query documents
 
@@ -619,7 +712,7 @@ maturin build --release --out dist
 maturin sdist --out dist
 python -m pip install ./dist/<your-platform-wheel>.whl
 python -m unittest discover -s tests -v
-python scripts/verify_sdist.py dist/cedrodb-0.6.0.tar.gz
+python scripts/verify_sdist.py dist/cedrodb-0.7.0.tar.gz
 python examples/offline_forms.py
 python examples/inventory_outbox.py
 python examples/local_worker.py

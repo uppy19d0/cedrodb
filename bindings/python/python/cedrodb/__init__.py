@@ -19,7 +19,7 @@ from typing import (
 
 from ._native import CedroError, DatabaseClosedError, NativeDatabase
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 __all__ = [
     "Database", "Collection", "Transaction", "CedroError", "DatabaseClosedError",
     "MISSING", "DELETE", "JSONValue", "Filter", "Record", "QueryPage",
@@ -29,6 +29,8 @@ __all__ = [
     "MAX_SAFE_INTEGER",
     "AgentStore", "AgentCheckpoint", "CheckpointResult", "AgentStatus",
     "SearchHit", "SearchPage", "SearchMode",
+    "OperationMetrics", "SessionMetrics", "CollectionDiagnostics", "Diagnostics",
+    "ContentLimits", "ProfilePlan", "QueryProfile", "SearchProfile",
 ]
 
 JSONValue = Union[None, bool, int, float, str, List["JSONValue"], Dict[str, "JSONValue"]]
@@ -116,6 +118,62 @@ class Stats(TypedDict):
     log_bytes: int
     latest_cursor: int
     indexes: int
+
+
+class OperationMetrics(TypedDict):
+    attempts: int
+    successes: int
+    failures: int
+    total_elapsed_micros: int
+    max_elapsed_micros: int
+
+
+class SessionMetrics(TypedDict):
+    query: OperationMetrics
+    search: OperationMetrics
+    commit: OperationMetrics
+
+
+class ContentLimits(TypedDict):
+    max_document_bytes: int
+    max_frame_bytes: int
+    max_state_bytes: int
+
+
+class CollectionDiagnostics(TypedDict):
+    collection: str
+    records: int
+    content_bytes: int
+    index_fields: List[str]
+
+
+class Diagnostics(TypedDict):
+    stats: Stats
+    limits: ContentLimits
+    collections: List[CollectionDiagnostics]
+    session: SessionMetrics
+    poisoned: bool
+    writer_active: bool
+
+
+class ProfilePlan(TypedDict):
+    collection_records: int
+    candidate_records: int
+    scanned: int
+    returned: int
+    used_index: Optional[str]
+
+
+class QueryProfile(TypedDict):
+    page: QueryPage
+    elapsed_micros: int
+    plan: ProfilePlan
+
+
+class SearchProfile(TypedDict):
+    page: SearchPage
+    elapsed_micros: int
+    plan: ProfilePlan
 
 
 class IntegrityReport(TypedDict):
@@ -449,6 +507,17 @@ class Database:
         self._check_open()
         return json.loads(self._native.stats_json())
 
+    def diagnostics(self) -> Diagnostics:
+        """Inspect content limits, collection/index inventory and session metrics.
+
+        No document values are returned. Timers measure native work, excluding
+        Python serialization. Counters reset on reopen; only query, search and
+        nonempty shared commit attempts are tracked. Conflicts and write errors
+        rejected before the commit path do not increment commit failures.
+        """
+        self._check_open()
+        return json.loads(self._native.diagnostics_json())
+
     def verify(self) -> IntegrityReport:
         """Verify the committed log and return its integrity report.
 
@@ -744,7 +813,26 @@ class Collection:
         """Return one page of {key, value} records. Use find_page for continuation."""
         return self.find_page(filters, limit=limit, after=after)["records"]
 
-    def search(
+    def profile_query(
+        self,
+        filters: Optional[Iterable[Filter]] = None,
+        *,
+        limit: int = 100,
+        after: Optional[str] = None,
+    ) -> QueryProfile:
+        """Execute a query once and return its page, plan and native microseconds.
+
+        Counts as one ordinary query. Reading does not append a transaction.
+        The plan describes this execution, including its keyset cursor.
+        """
+        self._database._check_open()
+        _positive_integer(limit, "limit")
+        if after is not None:
+            _string(after, "after")
+        request = {"filters": [] if filters is None else list(filters), "limit": limit, "after": after}
+        return json.loads(self._database._native.profile_query_json(self.name, _dumps(request)))
+
+    def _search_request(
         self,
         *,
         text: Optional[str] = None,
@@ -755,13 +843,7 @@ class Collection:
         limit: int = 10,
         max_scanned: int = 10_000,
         min_vector_score: Optional[float] = None,
-    ) -> SearchPage:
-        """Rank prefiltered documents by BM25, exact cosine, or hybrid RRF.
-
-        Supply your own embeddings; no model, network call or ANN index is
-        included. Exceeding max_scanned raises instead of returning partial
-        rankings. Index definitions remain local to this open handle.
-        """
+    ) -> str:
         self._database._check_open()
         if text is not None:
             _string(text, "text")
@@ -786,7 +868,55 @@ class Collection:
                 min_vector_score, "min_vector_score"
             ),
         }
-        return json.loads(self._database._native.search_json(self.name, _dumps(request)))
+        return _dumps(request)
+
+    def search(
+        self,
+        *,
+        text: Optional[str] = None,
+        vector: Optional[Iterable[float]] = None,
+        vector_field: str = "embedding",
+        text_fields: Optional[Iterable[str]] = None,
+        filters: Optional[Iterable[Filter]] = None,
+        limit: int = 10,
+        max_scanned: int = 10_000,
+        min_vector_score: Optional[float] = None,
+    ) -> SearchPage:
+        """Rank prefiltered documents by BM25, exact cosine, or hybrid RRF.
+
+        Supply your own embeddings. Exceeding max_scanned raises instead of
+        returning partial rankings. Index definitions are local to this handle.
+        """
+        request = self._search_request(
+            text=text, vector=vector, vector_field=vector_field, text_fields=text_fields,
+            filters=filters, limit=limit, max_scanned=max_scanned,
+            min_vector_score=min_vector_score,
+        )
+        return json.loads(self._database._native.search_json(self.name, request))
+
+    def profile_search(
+        self,
+        *,
+        text: Optional[str] = None,
+        vector: Optional[Iterable[float]] = None,
+        vector_field: str = "embedding",
+        text_fields: Optional[Iterable[str]] = None,
+        filters: Optional[Iterable[Filter]] = None,
+        limit: int = 10,
+        max_scanned: int = 10_000,
+        min_vector_score: Optional[float] = None,
+    ) -> SearchProfile:
+        """Execute retrieval once and report its page, plan and native timing.
+
+        The result includes document values, like search(). A failed retrieval
+        raises the same error; no partial page or successful profile is returned.
+        """
+        request = self._search_request(
+            text=text, vector=vector, vector_field=vector_field, text_fields=text_fields,
+            filters=filters, limit=limit, max_scanned=max_scanned,
+            min_vector_score=min_vector_score,
+        )
+        return json.loads(self._database._native.profile_search_json(self.name, request))
 
     def iter_records(
         self, filters: Optional[Iterable[Filter]] = None, *, page_size: int = 100

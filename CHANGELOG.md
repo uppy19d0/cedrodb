@@ -2,6 +2,15 @@
 
 All releases remain experimental. Future work is separate in [the roadmap](docs/roadmap.md).
 
+## 0.7.0 — 2026-10-15
+
+- Added owner-handle diagnostics with content limits, collection/index inventory, handle health and bounded session counters for queries, searches and nonempty shared commit attempts.
+- Added query/search execution profiles with the ordinary result page, native monotonic timing and actual collection/candidate/scanned/returned counts from the same execution.
+- Added typed Node/Python APIs and executable monitoring/index-comparison examples. Metrics reset on reopen and do not alter the log or backup format.
+- Added `python -m cedrodb doctor` and an isolated deterministic benchmark with correctness checks, warmup, native/SDK timing samples, batch writes, index construction and reopening.
+- Improved installation instructions with OS/architecture requirements, virtual environments, verification commands and explicit unsupported native runtimes.
+- Profiles execute real work. Diagnostic counters are not complete application tracing, process RSS, external model latency or a production SLA.
+
 ## 0.6.0 — 2026-10-15
 
 - Added native agent checkpoint stores with expected-revision fencing, scoped thread IDs and atomic document/outbox writes.

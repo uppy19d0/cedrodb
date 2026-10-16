@@ -14,12 +14,13 @@ use std::fmt;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
 mod advanced;
 mod agent;
 mod conditional;
 mod maintenance;
+mod performance;
 mod query;
 mod queue;
 mod search;
@@ -27,6 +28,10 @@ pub use advanced::{ChangeOperation, ChangePage, ChangeTransaction, Stats};
 pub use agent::{AgentCheckpoint, AgentStatus, CheckpointOptions, CheckpointResult};
 pub use conditional::{Condition, ConditionalResult};
 pub use maintenance::IntegrityReport;
+pub use performance::{
+    CollectionDiagnostics, Diagnostics, OperationMetrics, ProfilePlan, QueryProfile, SearchProfile,
+    SessionMetrics,
+};
 pub use query::{Filter, FilterOp, Query, QueryPage, Record};
 pub use queue::{EnqueueOptions, EnqueueResult, Job, JobStatus, QueueStats, RecoveryResult};
 pub use search::{SearchHit, SearchMode, SearchPage, SearchQuery};
@@ -97,7 +102,8 @@ impl From<serde_json::Error> for Error {
 /// State bytes count JSON value bytes plus UTF-8 collection/key bytes per record.
 /// The log is not compacted and can grow without a disk-size limit.
 /// Optional indexes and an eight-byte offset per transaction are additional RAM.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Options {
     pub max_document_bytes: usize,
     pub max_frame_bytes: usize,
@@ -164,6 +170,7 @@ struct Inner {
     poisoned: bool,
     // One offset per committed frame, never a second in-memory copy of history.
     frame_offsets: Vec<u64>,
+    metrics: Arc<performance::SessionCounters>,
 }
 
 /// One exclusively opened database directory, safe to share across threads.
@@ -171,6 +178,7 @@ struct Inner {
 pub struct Database {
     inner: Mutex<Inner>,
     options: Options,
+    metrics: Arc<performance::SessionCounters>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -255,6 +263,7 @@ impl Database {
             recover(&mut file, options)?
         };
         file.seek(SeekFrom::End(0))?;
+        let metrics = Arc::new(performance::SessionCounters::default());
         Ok(Self {
             inner: Mutex::new(Inner {
                 file,
@@ -262,8 +271,10 @@ impl Database {
                 writer_active: false,
                 poisoned: false,
                 frame_offsets,
+                metrics: Arc::clone(&metrics),
             }),
             options,
+            metrics,
         })
     }
 
@@ -413,6 +424,14 @@ fn commit_operations(inner: &mut Inner, operations: &[Operation], options: Optio
     if operations.is_empty() {
         return Ok(());
     }
+    let metrics = Arc::clone(&inner.metrics);
+    let timer = metrics.commit.start();
+    let result = persist_operations(inner, operations, options);
+    timer.finish(result.is_ok());
+    result
+}
+
+fn persist_operations(inner: &mut Inner, operations: &[Operation], options: Options) -> Result<()> {
     let (changes, state_bytes) = prepare_changes(&inner.state, operations, options)?;
     // Serialize by reference so staging and compare-and-set share one commit path.
     #[derive(Serialize)]
@@ -759,6 +778,11 @@ mod tests {
             .put("orders", "one", json!({"amount": 12}))
             .unwrap();
         assert!(matches!(transaction.commit(), Err(Error::Io(_))));
+        let diagnostics = database.diagnostics().unwrap();
+        assert!(diagnostics.poisoned);
+        assert_eq!(diagnostics.session.commit.attempts, 1);
+        assert_eq!(diagnostics.session.commit.successes, 0);
+        assert_eq!(diagnostics.session.commit.failures, 1);
         assert!(matches!(database.begin_write(), Err(Error::Poisoned)));
         assert!(matches!(
             database.get("orders", "one"),

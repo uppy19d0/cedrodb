@@ -388,6 +388,48 @@ impl NativeDatabase {
         })
     }
 
+    fn diagnostics_json(&self, py: Python<'_>) -> PyResult<String> {
+        py.detach(|| {
+            self.with_database(|database| encode(&database.diagnostics().map_err(engine_error)?))
+        })
+    }
+
+    fn profile_query_json(
+        &self,
+        py: Python<'_>,
+        collection: &str,
+        query: &str,
+    ) -> PyResult<String> {
+        py.detach(|| {
+            let query: Query = parse(query)?;
+            self.with_database(|database| {
+                encode(
+                    &database
+                        .profile_query(collection, query)
+                        .map_err(engine_error)?,
+                )
+            })
+        })
+    }
+
+    fn profile_search_json(
+        &self,
+        py: Python<'_>,
+        collection: &str,
+        query: &str,
+    ) -> PyResult<String> {
+        py.detach(|| {
+            let query: SearchQuery = parse(query)?;
+            self.with_database(|database| {
+                encode(
+                    &database
+                        .profile_search(collection, query)
+                        .map_err(engine_error)?,
+                )
+            })
+        })
+    }
+
     fn agent_json(&self, py: Python<'_>, request: &str) -> PyResult<String> {
         py.detach(|| {
             let request: AgentRequest = parse(request)?;

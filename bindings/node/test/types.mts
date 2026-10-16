@@ -1,4 +1,4 @@
-import cedrodb, { Database, Queue, AgentStore, type Query, type JsonValue, type QueueStats, type Job, type SearchPage, type AgentCheckpoint } from 'cedrodb';
+import cedrodb, { Database, Queue, AgentStore, type Query, type JsonValue, type QueueStats, type Job, type SearchPage, type AgentCheckpoint, type Diagnostics, type QueryProfile, type SearchProfile } from 'cedrodb';
 const db = new Database('./unused-typecheck');
 const jobs = db.collection<{ state: string; score: number }>('jobs');
 const query: Query = { filters: [{ field: 'state', op: 'eq', value: 'pending' }] };
@@ -24,6 +24,11 @@ const agents = db.agent<{ messages: string[] }>('support');
 const agentConstructor: typeof AgentStore = cedrodb.AgentStore;
 const saved = agents.checkpoint('thread', { messages: ['hello'] }, { expectedRevision: null, nowMs: 1000, status: 'waiting', metadata: { source: 'test' } });
 const checkpoint: AgentCheckpoint<{ messages: string[] }> | undefined = agents.get('thread');
+const diagnostics: Diagnostics = db.diagnostics();
+const queryProfile: QueryProfile<{ state: string; score: number }> = jobs.profileQuery(query);
+const searchProfile: SearchProfile<{ state: string; score: number }> = jobs.profileSearch({ vector: [1, 0] });
+const profiledState: string | undefined = queryProfile.page.records[0]?.value.state;
+const profiledScore: number | undefined = searchProfile.page.hits[0]?.value.score;
 if (saved.applied) agents.checkpoint('thread', { messages: ['hello', 'world'] }, { expectedRevision: saved.checkpoint.revision });
 const lease = queue.claim('worker:1', { nowMs: 1000, leaseMs: 100 });
 if (lease) {
@@ -31,7 +36,7 @@ if (lease) {
   queue.extend(lease.id, lease.leaseToken, { nowMs: 1010, leaseMs: 100 });
   queue.ack(lease.id, lease.leaseToken, { nowMs: 1020, operations: [{ kind: 'put', collection: 'results', key: lease.id, value: payload }] });
 }
-void [values, next, cursor, same, verified, backedUp, restored, failed, queued, queueConstructor, queueStats, search, checkpoint, agentConstructor];
+void [values, next, cursor, same, verified, backedUp, restored, failed, queued, queueConstructor, queueStats, search, checkpoint, agentConstructor, diagnostics, queryProfile, searchProfile, profiledState, profiledScore];
 // @ts-expect-error BigInt is not a JSON document.
 jobs.put('a', 1n);
 // @ts-expect-error Query operator is a closed set.
@@ -48,3 +53,7 @@ db.collection('knowledge').search({ vector: ['invalid'] });
 agents.checkpoint('thread', { messages: [] }, { status: 'approved' });
 // @ts-expect-error Agent states obey their declared generic shape.
 agents.checkpoint('thread', { messages: [42] });
+// @ts-expect-error Profiling uses the same closed query option type.
+jobs.profileQuery({ maxScanned: 10 });
+// @ts-expect-error A search profile requires search options.
+jobs.profileSearch();

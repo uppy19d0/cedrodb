@@ -419,6 +419,34 @@ impl NativeDatabase {
     }
 
     #[napi]
+    pub fn profile_query_json(&self, collection: String, query_json: String) -> Result<String> {
+        let query: Query = decode(&query_json)?;
+        for filter in &query.filters {
+            validate_portable_json(&filter.value)?;
+        }
+        encode(
+            &self
+                .database()?
+                .profile_query(&collection, query)
+                .map_err(engine_error)?,
+        )
+    }
+
+    #[napi]
+    pub fn profile_search_json(&self, collection: String, query_json: String) -> Result<String> {
+        let value: Value = decode(&query_json)?;
+        validate_portable_json(&value)?;
+        let query: SearchQuery =
+            serde_json::from_value(value).map_err(|error| invalid(error.to_string()))?;
+        encode(
+            &self
+                .database()?
+                .profile_search(&collection, query)
+                .map_err(engine_error)?,
+        )
+    }
+
+    #[napi]
     pub fn agent_json(&self, request_json: String) -> Result<String> {
         let value: Value = decode(&request_json)?;
         validate_portable_json(&value)?;
@@ -501,6 +529,11 @@ impl NativeDatabase {
     #[napi]
     pub fn stats(&self) -> Result<String> {
         encode(&self.database()?.stats().map_err(engine_error)?)
+    }
+
+    #[napi]
+    pub fn diagnostics(&self) -> Result<String> {
+        encode(&self.database()?.diagnostics().map_err(engine_error)?)
     }
 
     #[napi]
