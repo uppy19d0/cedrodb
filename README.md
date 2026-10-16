@@ -23,13 +23,7 @@ One open handle owns a database directory. Operations within it serialize throug
 
 ## Install
 
-Install Node.js 0.6 from the verified release download while npm account renewal is pending:
-
-```sh
-npm install https://www.ltavarez.me/downloads/cedrodb-0.6.0.tgz
-```
-
-Once npm registry publication is verified, the command by name is:
+Install Node.js from [npm](https://www.npmjs.com/package/cedrodb/v/0.6.0):
 
 ```sh
 npm install cedrodb@0.6.0
