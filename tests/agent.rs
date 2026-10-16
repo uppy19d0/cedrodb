@@ -665,6 +665,9 @@ fn malformed_legacy_checkpoint_records_fail_without_being_overwritten() {
             ),
             Err(Error::Corruption(_))
         ));
+        // Windows enforces the database's exclusive byte-range lock for reads
+        // through a second file handle as well. Inspect bytes after closing.
+        drop(recovered);
         assert_eq!(fs::read(log).unwrap(), bytes);
     }
 }
