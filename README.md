@@ -1,5 +1,7 @@
 # CedroDB
 
+<img src="docs/assets/cedrodb-logo.png" alt="CedroDB logo" width="160" />
+
 **Local storage for agent checkpoints, searchable memory and recoverable work.**
 
 CedroDB is a Rust engine with native Node.js/TypeScript and Python libraries. Save an agent checkpoint and its document/outbox writes in one transaction, reject stale checkpoint revisions, and retrieve local memory using text, supplied embeddings or both. Documents, jobs, backups and a durable changefeed share one storage format.
