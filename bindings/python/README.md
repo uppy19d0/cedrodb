@@ -1,5 +1,8 @@
 # CedroDB for Python
 
+<img src="https://raw.githubusercontent.com/uppy19d0/cedrodb/main/docs/assets/cedrodb-logo.png" alt="CedroDB logo" width="128" />
+
+
 **Keep agent checkpoints, searchable memory and local jobs in one database.**
 CedroDB is an embedded document engine written in Rust, with a native Python API.
 Save agent state and its result/outbox writes atomically with expected-revision

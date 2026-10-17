@@ -1,5 +1,8 @@
 # CedroDB for Node.js
 
+<img src="https://raw.githubusercontent.com/uppy19d0/cedrodb/main/docs/assets/cedrodb-logo.png" alt="CedroDB logo" width="128" />
+
+
 A small embedded document database powered by the CedroDB Rust engine through N-API. Store JSON locally, commit related changes together, query indexed fields, and replay durable transactions without running a database server.
 
 **Experimental 0.8 release.** CedroDB keeps active documents in memory and persists a checksummed transaction log. Capabilities include query diagnostics/profiles, exact local text/vector retrieval, revision-protected agent checkpoints, durable local job queues, guarded transactions and verified backups. It is intended for evaluation, local tools and applications whose storage limits fit the documented memory model.
