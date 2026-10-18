@@ -302,3 +302,28 @@ fn a_deep_document_cannot_create_an_unreadable_committed_log() {
         accepted.then_some(deeply_nested)
     );
 }
+
+#[test]
+fn concurrent_one_shot_puts_serialize_instead_of_writer_busy() {
+    let dir = TestDirectory::new();
+    let db = std::sync::Arc::new(Database::open(dir.path()).unwrap());
+    let handles: Vec<_> = (0..8)
+        .map(|t| {
+            let db = db.clone();
+            std::thread::spawn(move || {
+                for i in 0..50 {
+                    db.put(
+                        "c",
+                        &format!("k{t}-{i}"),
+                        serde_json::json!({"t": t, "i": i}),
+                    )
+                    .unwrap();
+                }
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
+    }
+    assert_eq!(db.get("c", "k7-49").unwrap().unwrap()["i"], 49);
+}
