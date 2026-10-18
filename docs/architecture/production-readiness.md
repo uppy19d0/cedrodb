@@ -38,7 +38,7 @@ Five most important facts:
 | G5 | Short/unknown header rejected without modification | lib.rs:866-876; tests/durability.rs:238 | tested |
 | G6 | After a commit I/O error the handle is poisoned; reopen resolves the outcome from disk | lib.rs:418-424, 586-604; unit test lib.rs:952 covers a write failure only | tested (write failure only; fsync-only, short write and ENOSPC untested) |
 | G7 | Second handle/process gets `DatabaseLocked` | lib.rs:376-388; tests/durability.rs:110 (same process only) | tested (same process); cross-process untested |
-| G8 | Committed transaction survives process exit without destructors | tests/durability.rs:264 | tested (clean exit, not kill, not power loss) |
+| G8 | Committed transaction survives process exit without destructors | tests/durability.rs:264; tests/kill_loop.rs (SIGKILL, 8 rounds, unix) | tested (clean exit and SIGKILL; not power loss) |
 | G9 | New-database creation syncs file and directories (Unix) | lib.rs:391-397, 934-943 | untested |
 | G10 | Only one staged writer; others get `WriterBusy`; drop releases the slot | lib.rs:426-433, 610-617; tests/conditional.rs:392, tests/queue.rs:949 | tested |
 | G11 | `compare_exchange` has exactly one winner among 16 threads | advanced.rs:89-128; tests/advanced.rs:~305-340 | tested |
@@ -225,6 +225,7 @@ Keep the single-process, single-file, fully in-RAM, append-only log with one coa
 5. **One-way changefeed applier / replication** (contiguous cursor checks, promotion, history identity).
 6. **Optional in-memory ANN index** (opt-in flag, approximate marker in `SearchPage`, exact search as recall oracle, prefilter handling, hybrid ranking).
 7. **Queue pruning / retention API,** because it interacts with reserved id semantics, enqueue idempotency and cursors.
+9. **Fault injection for commit I/O** (fsync-only failure, short write, ENOSPC): `Inner.file` is a concrete `File`, so injecting faults needs a file-abstraction seam in `persist_operations`, which touches the release commit path. Not done; `tests/kill_loop.rs` covers only SIGKILL (OS page cache survives, so it says nothing about power loss or fsync semantics).
 8. **Opt-in repair mode** for a complete but invalid tail frame, including a policy for zero-filled tails.
 
 ## Not verified by this audit
