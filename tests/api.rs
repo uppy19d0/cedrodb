@@ -302,3 +302,65 @@ fn a_deep_document_cannot_create_an_unreadable_committed_log() {
         accepted.then_some(deeply_nested)
     );
 }
+
+#[test]
+fn concurrent_one_shot_puts_serialize_instead_of_writer_busy() {
+    let dir = TestDirectory::new();
+    let db = std::sync::Arc::new(Database::open(dir.path()).unwrap());
+    let handles: Vec<_> = (0..8)
+        .map(|t| {
+            let db = db.clone();
+            std::thread::spawn(move || {
+                for i in 0..50 {
+                    db.put(
+                        "c",
+                        &format!("k{t}-{i}"),
+                        serde_json::json!({"t": t, "i": i}),
+                    )
+                    .unwrap();
+                }
+            })
+        })
+        .collect();
+    for h in handles {
+        h.join().unwrap();
+    }
+    for t in 0..8 {
+        for i in 0..50 {
+            assert_eq!(db.get("c", &format!("k{t}-{i}")).unwrap().unwrap()["i"], i);
+        }
+    }
+}
+
+#[test]
+fn reopening_with_smaller_limits_reports_limit_error_not_corruption() {
+    let directory = TestDirectory::new();
+    {
+        let database = Database::open(directory.path()).unwrap();
+        database
+            .put("records", "big", json!({"payload": "x".repeat(2_000)}))
+            .unwrap();
+    }
+    for options in [
+        Options {
+            max_frame_bytes: 512,
+            ..Options::default()
+        },
+        Options {
+            max_document_bytes: 512,
+            ..Options::default()
+        },
+        Options {
+            max_state_bytes: 512,
+            ..Options::default()
+        },
+    ] {
+        match Database::open_with_options(directory.path(), options) {
+            Err(cedrodb::Error::LimitExceeded(_)) => {}
+            Err(other) => panic!("expected LimitExceeded, got {other}"),
+            Ok(_) => panic!("reopen with smaller limits must fail"),
+        }
+    }
+    let database = Database::open(directory.path()).unwrap();
+    assert!(database.get("records", "big").unwrap().is_some());
+}

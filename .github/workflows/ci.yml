@@ -21,6 +21,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: python scripts/check-release-metadata.py
+      - run: python scripts/test_check_vendored_core.py
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
@@ -55,6 +56,8 @@ jobs:
         run: |
           python -c "import glob,subprocess,sys; subprocess.check_call([sys.executable,'-m','pip','install','--force-reinstall',*glob.glob('dist/*.whl')])"
           python -m unittest discover -s tests -v
+      - name: Verify vendored engine copies match src/
+        run: python scripts/check-vendored-core.py
       - name: Verify Node and Python use the same storage
         run: python scripts/check-interoperability.py
       - name: Verify optional PydanticAI conversation persistence without model calls
@@ -81,6 +84,157 @@ jobs:
           path: |
             bindings/python/dist/*.whl
             bindings/python/dist/*.tar.gz
+          if-no-files-found: error
+
+  # abi3 wheel matrix. Wheels are built here and installed by the smoke jobs
+  # below; publish-registries.yml refuses to publish without those results.
+  wheels:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: manylinux-x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            manylinux: '2_28'
+          - label: manylinux-aarch64
+            os: ubuntu-22.04
+            target: aarch64-unknown-linux-gnu
+            manylinux: '2_28'
+          - label: musllinux-x86_64
+            os: ubuntu-22.04
+            target: x86_64-unknown-linux-musl
+            manylinux: musllinux_1_2
+          - label: macos-x86_64
+            os: macos-15-intel
+            target: x86_64-apple-darwin
+            manylinux: auto
+          - label: macos-arm64
+            os: macos-15
+            target: aarch64-apple-darwin
+            manylinux: auto
+          - label: windows-x64
+            os: windows-2022
+            target: x86_64-pc-windows-msvc
+            manylinux: auto
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - name: Vendor the Rust core into the package
+        run: python bindings/python/scripts/prepare_core.py
+      # PyO3/maturin-action v1.51.0, pinned by commit SHA.
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
+        with:
+          working-directory: bindings/python
+          target: ${{ matrix.target }}
+          manylinux: ${{ matrix.manylinux }}
+          args: --release --locked --out dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pywheel-${{ matrix.label }}
+          path: bindings/python/dist/*.whl
+          if-no-files-found: error
+
+  sdist:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - run: python bindings/python/scripts/prepare_core.py
+      # PyO3/maturin-action v1.51.0, pinned by commit SHA.
+      - uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
+        with:
+          working-directory: bindings/python
+          command: sdist
+          args: --out dist
+      # verify_sdist builds with --no-build-isolation, so maturin must be importable here.
+      - run: python -m pip install 'maturin>=1.15,<2'
+      - run: python bindings/python/scripts/verify_sdist.py bindings/python/dist/*.tar.gz
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pysdist
+          path: bindings/python/dist/*.tar.gz
+          if-no-files-found: error
+
+  # Install each wheel in a fresh virtualenv with only the wheel (no source
+  # checkout on sys.path) and run open/commit/reopen. The uploaded
+  # wheel-smoke-<label> artifact is the evidence publishing requires.
+  wheel-smoke:
+    needs: wheels
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: manylinux-x86_64
+            os: ubuntu-22.04
+          - label: manylinux-aarch64
+            os: ubuntu-24.04-arm
+          - label: macos-x86_64
+            os: macos-15-intel
+          - label: macos-arm64
+            os: macos-15
+          - label: windows-x64
+            os: windows-2022
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          name: pywheel-${{ matrix.label }}
+          path: wheelhouse
+      - name: Install the wheel in a clean venv and run the smoke script
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/smoke-venv"
+          if [ -d "$RUNNER_TEMP/smoke-venv/Scripts" ]; then BIN="$RUNNER_TEMP/smoke-venv/Scripts"; else BIN="$RUNNER_TEMP/smoke-venv/bin"; fi
+          "$BIN/python" -m pip install --no-index --no-deps wheelhouse/*.whl
+          SCRIPT="$PWD/bindings/python/scripts/smoke_wheel.py"
+          mkdir "$RUNNER_TEMP/smoke-cwd"
+          cd "$RUNNER_TEMP/smoke-cwd"
+          "$BIN/python" -I "$SCRIPT"
+          cd - >/dev/null
+          mkdir -p smoke-result
+          { echo "label=${{ matrix.label }}"; echo "result=ok"; ls wheelhouse; } > smoke-result/${{ matrix.label }}.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-smoke-${{ matrix.label }}
+          path: smoke-result/*.txt
+          if-no-files-found: error
+
+  # musllinux wheel: smoke inside an Alpine container via docker run, so no
+  # JavaScript actions have to run inside the Alpine image.
+  wheel-smoke-musl:
+    needs: wheels
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          name: pywheel-musllinux-x86_64
+          path: wheelhouse
+      - name: Install the wheel in a clean Alpine venv and run the smoke script
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD/wheelhouse:/w:ro" -v "$PWD/bindings/python/scripts:/s:ro" python:3.11-alpine sh -ec '
+            python -m venv /tmp/v
+            /tmp/v/bin/pip install --no-index --no-deps /w/*.whl
+            cd /tmp
+            /tmp/v/bin/python -I /s/smoke_wheel.py'
+          mkdir -p smoke-result
+          { echo "label=musllinux-x86_64"; echo "result=ok"; ls wheelhouse; } > smoke-result/musllinux-x86_64.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-smoke-musllinux-x86_64
+          path: smoke-result/*.txt
           if-no-files-found: error
 
   distributions:

@@ -9,6 +9,16 @@ A small embedded document database powered by the CedroDB Rust engine through N-
 
 [Project](https://github.com/uppy19d0/cedrodb) · [Architecture](https://github.com/uppy19d0/cedrodb/blob/main/docs/architecture.md) · [Backup and recovery](https://github.com/uppy19d0/cedrodb/blob/main/docs/backups.md) · [Python API](https://github.com/uppy19d0/cedrodb/tree/main/bindings/python) · [Interactive demo](https://www.ltavarez.me/labs/cedrodb)
 
+> **What it is not**
+>
+> - **Single process.** One open handle owns a database directory; there is no multi-process access, server or replication.
+> - **Data in RAM.** All live documents and indexes are held in memory (default state limit 64 MiB); it cannot hold more data than fits in memory, and reopening replays the whole log.
+> - **Experimental 0.x.** Not production validated; on-disk and API stability is not promised before 1.0.
+> - **Durable by default, at a cost.** Every commit calls `fsync` (`sync_all`) before it becomes visible; this protects against process kill, not a guarantee against every power-loss or hardware fault.
+> - **No SQL.** Choose SQLite or another mature database when you need SQL, multi-process access or data larger than memory.
+>
+> Measured comparison, including where SQLite wins (reopen time, peak memory): [docs/benchmarks.md](https://github.com/uppy19d0/cedrodb/blob/main/docs/benchmarks.md) (written in Spanish). Single machine, synthetic data; not a general claim.
+
 ## Install
 
 ```sh

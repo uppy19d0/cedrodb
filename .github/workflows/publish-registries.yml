@@ -21,7 +21,47 @@ permissions:
   actions: read
 
 jobs:
+  # Refuse to publish from a run that is not a successful main-branch CI run of
+  # this repository carrying the expected artifacts. Read-only (actions: read).
+  validate:
+    if: inputs.npm || inputs.python
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Validate the supplied run and its artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ inputs.run_id }}
+          WANT_PYTHON: ${{ inputs.python }}
+        run: |
+          set -euo pipefail
+          case "$RUN_ID" in ''|*[!0-9]*) echo "run_id must be numeric" >&2; exit 1;; esac
+          run=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID")
+          check() { # name, expected, actual
+            if [ "$2" != "$3" ]; then echo "run $RUN_ID: $1 is '$3', expected '$2'" >&2; exit 1; fi
+          }
+          check repository "$GITHUB_REPOSITORY" "$(jq -r .repository.full_name <<<"$run")"
+          check head_repository "$GITHUB_REPOSITORY" "$(jq -r .head_repository.full_name <<<"$run")"
+          check workflow_path ".github/workflows/ci.yml" "$(jq -r '.path | split("@")[0]' <<<"$run")"
+          check status completed "$(jq -r .status <<<"$run")"
+          check conclusion success "$(jq -r .conclusion <<<"$run")"
+          check head_branch main "$(jq -r .head_branch <<<"$run")"
+          check event push "$(jq -r .event <<<"$run")"
+          echo "run $RUN_ID head_sha $(jq -r .head_sha <<<"$run")"
+          names=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" \
+            --jq '.artifacts[] | select(.expired | not) | .name')
+          need() { grep -qx "$1" <<<"$names" || { echo "missing artifact: $1" >&2; exit 1; }; }
+          need distributions
+          if [ "$WANT_PYTHON" = "true" ]; then
+            need pysdist
+            for label in manylinux-x86_64 manylinux-aarch64 musllinux-x86_64 macos-x86_64 macos-arm64 windows-x64; do
+              need "pywheel-$label"
+              need "wheel-smoke-$label"
+            done
+          fi
+          echo "validation passed"
+
   npm:
+    needs: validate
     if: inputs.npm
     runs-on: ubuntu-22.04
     environment: npm
@@ -30,6 +70,7 @@ jobs:
       actions: read
       id-token: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -40,11 +81,16 @@ jobs:
           run-id: ${{ inputs.run_id }}
           name: distributions
           path: dist
+      - name: Verify tarball contains every prebuilt native engine
+        run: |
+          set -e
+          for f in dist/downloads/*.tgz; do python3 scripts/check-npm-tarball.py "$f"; done
       - run: npm publish dist/downloads/*.tgz --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
   pypi:
+    needs: validate
     if: inputs.python
     runs-on: ubuntu-22.04
     environment: pypi
@@ -53,15 +99,26 @@ jobs:
       actions: read
       id-token: write
     steps:
+      # Publish exactly the wheels that passed the clean-venv smoke job, plus the sdist.
       - uses: actions/download-artifact@v4
         with:
           github-token: ${{ github.token }}
           run-id: ${{ inputs.run_id }}
-          name: distributions
-          path: dist
-      - run: |
-          mkdir python-dist
-          cp dist/downloads/*.whl dist/downloads/*.tar.gz python-dist/
+          pattern: pywheel-*
+          path: python-dist
+          merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.run_id }}
+          name: pysdist
+          path: python-dist
+      - name: Require six wheels and one sdist
+        run: |
+          set -e
+          ls python-dist
+          test "$(ls python-dist/*.whl | wc -l)" -eq 6
+          test "$(ls python-dist/*.tar.gz | wc -l)" -eq 1
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: python-dist/

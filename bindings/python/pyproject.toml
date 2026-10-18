@@ -10,12 +10,24 @@ readme = "README.md"
 requires-python = ">=3.9"
 license = { text = "MIT" }
 authors = [{ name = "Luis Tavarez" }]
-keywords = ["embedded", "database", "rust", "agent-memory", "checkpoints", "vector-search", "hybrid-search", "local-first"]
+keywords = ["embedded", "database", "rust", "agent-memory", "checkpoints", "vector-search", "hybrid-search", "local-first", "json", "document-database", "append-only-log", "outbox", "job-queue"]
 classifiers = [
   "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: Microsoft :: Windows",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: Implementation :: CPython",
   "Programming Language :: Rust",
+  "Typing :: Typed",
   "Topic :: Database :: Database Engines/Servers",
 ]
 
@@ -24,7 +36,9 @@ cedrodb = "cedrodb.cli:main"
 
 [project.urls]
 Homepage = "https://www.ltavarez.me/labs/cedrodb"
-Documentation = "https://www.ltavarez.me/labs/cedrodb"
+Documentation = "https://github.com/uppy19d0/cedrodb/tree/main/bindings/python#readme"
+Issues = "https://github.com/uppy19d0/cedrodb/issues"
+Changelog = "https://github.com/uppy19d0/cedrodb/blob/main/CHANGELOG.md"
 Repository = "https://github.com/uppy19d0/cedrodb"
 
 [tool.maturin]

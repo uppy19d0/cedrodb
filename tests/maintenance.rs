@@ -332,3 +332,92 @@ fn maintenance_rejects_active_transactions_without_publishing_backups() {
     assert_eq!(database.backup(&backup).unwrap().records, 1);
     assert!(database.get("docs", "staged").unwrap().is_none());
 }
+
+static EXPECTED_LOG_BYTES: AtomicU64 = AtomicU64::new(0);
+
+#[test]
+fn restore_publishes_destination_only_when_complete_and_leaves_no_staging() {
+    let directory = TestDirectory::new();
+    let source = Database::open(directory.join("source")).unwrap();
+    let payload = "x".repeat(8192);
+    for batch in 0..40 {
+        let mut transaction = source.begin_write().unwrap();
+        for item in 0..50 {
+            transaction
+                .put(
+                    "documents",
+                    &format!("{batch}-{item}"),
+                    json!({ "p": payload }),
+                )
+                .unwrap();
+        }
+        transaction.commit().unwrap();
+    }
+    let backup = directory.join("backup.cedrobak");
+    let expected = source.backup(&backup).unwrap();
+    drop(source);
+    EXPECTED_LOG_BYTES.store(expected.log_bytes, Ordering::Relaxed);
+
+    let destination = directory.join("restored");
+    let watched = destination.clone();
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = stop.clone();
+    let observer = std::thread::spawn(move || {
+        // Whenever the final name is visible it must already be complete.
+        while !flag.load(Ordering::Relaxed) {
+            if let Ok(log) = fs::metadata(watched.join("cedro.log")) {
+                assert_eq!(
+                    log.len(),
+                    EXPECTED_LOG_BYTES.load(Ordering::Relaxed),
+                    "partial restore visible at the final name"
+                );
+            }
+            std::thread::yield_now();
+        }
+    });
+    Database::restore_backup(&backup, &destination).unwrap();
+    stop.store(true, Ordering::Relaxed);
+    observer.join().unwrap();
+
+    assert_eq!(
+        Database::open(&destination).unwrap().verify().unwrap(),
+        expected
+    );
+    let mut names: Vec<_> = fs::read_dir(&directory.0)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["backup.cedrobak", "restored", "source"]);
+}
+
+#[test]
+fn failed_restore_leaves_no_destination_or_staging_directory() {
+    let directory = TestDirectory::new();
+    let backup = directory.join("bad.cedrobak");
+    fs::write(&backup, b"not a backup").unwrap();
+    assert!(Database::restore_backup(&backup, directory.join("restored")).is_err());
+    let names: Vec<_> = fs::read_dir(&directory.0)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["bad.cedrobak"]);
+}
+
+#[test]
+fn leftover_staging_directory_from_interrupted_restore_is_not_the_destination() {
+    let directory = TestDirectory::new();
+    let source = Database::open(directory.join("source")).unwrap();
+    source.put("documents", "a", json!(1)).unwrap();
+    let backup = directory.join("backup.cedrobak");
+    source.backup(&backup).unwrap();
+    drop(source);
+    // Simulate a crash mid-restore: a truncated log inside a staging name.
+    let stale = directory.join(".restored.1.0.restoring");
+    fs::create_dir(&stale).unwrap();
+    fs::write(stale.join("cedro.log"), b"CEDRO").unwrap();
+    assert!(!directory.join("restored").exists());
+    Database::restore_backup(&backup, directory.join("restored")).unwrap();
+    let restored = Database::open(directory.join("restored")).unwrap();
+    assert!(restored.get("documents", "a").unwrap().is_some());
+}

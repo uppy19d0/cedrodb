@@ -25,6 +25,33 @@ has one owning handle/process, and the log currently has no compaction. See the
 limits below before choosing it for important data. There are no performance
 claims or production-readiness guarantees.
 
+## Quick start
+
+```sh
+python -m pip install cedrodb==0.8.0
+```
+
+```python
+from cedrodb import Database
+
+with Database('./app.cedro') as db:
+    notes = db.collection('notes')
+    notes.put_many({'a': {'state': 'pending'}, 'b': {'state': 'sent'}})
+    notes.create_index('state')
+    page = notes.find_page([{'field': 'state', 'op': 'eq', 'value': 'pending'}])
+    print(page['records'])
+```
+
+> **What it is not**
+>
+> - **Single process.** One open handle owns a database directory; there is no multi-process access, server or replication.
+> - **Data in RAM.** All live documents and indexes are held in memory (default state limit 64 MiB); it cannot hold more data than fits in memory, and reopening replays the whole log.
+> - **Experimental 0.x.** Not production validated; on-disk and API stability is not promised before 1.0.
+> - **Durable by default, at a cost.** Every commit calls `fsync` (`sync_all`) before it becomes visible; this protects against process kill, not a guarantee against every power-loss or hardware fault.
+> - **No SQL.** Choose SQLite or another mature database when you need SQL, multi-process access or data larger than memory.
+>
+> Measured comparison, including where SQLite wins (reopen time, peak memory): [docs/benchmarks.md](https://github.com/uppy19d0/cedrodb/blob/main/docs/benchmarks.md) (written in Spanish). Single machine, synthetic data; not a general claim.
+
 ## Install on your operating system
 
 Use CPython 3.9+ in a virtual environment. These commands use the environment's

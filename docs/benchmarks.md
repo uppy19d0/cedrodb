@@ -46,31 +46,31 @@ es equivalente.
 Primer resultado publicado: CedroDB 0.8.0 y SQLite 3.46.0 (compilado desde el
 código empaquetado), Apple M2, macOS, compilación `release`, 100,000 documentos
 JSON sintéticos, mediana [mínimo–máximo] de 3 ejecuciones. Los datos completos y
-el entorno están en [`results/`](../benchmarks/sqlite-comparison/results).
+el entorno están en [`results/`](../benchmarks/sqlite-comparison/results) (`2026-10-18-apple-m2-batch3-*`).
 
 | Métrica | CedroDB | SQLite WAL + FULL | SQLite DELETE + FULL |
 | --- | ---: | ---: | ---: |
-| Commit de 1 documento, p50 | 4.06 ms | 4.09 ms | 13.96 ms |
-| Inserción, 100 documentos por commit | 19,808 doc/s | 18,760 doc/s | 6,469 doc/s |
-| Inserción, 1,000 documentos por commit | 138,701 [131,232–139,557] doc/s | 142,341 [141,800–154,836] doc/s | 53,452 doc/s |
-| Lectura por clave existente, p50 | 0.8 µs | 3.8 µs | 7.0 µs |
-| Agregado count/sum/min/max, p50 | 6.9 ms | 95.5 ms | 96.7 ms |
-| Reapertura con el historial | 201.9 ms | 0.4 ms | 0.2 ms |
-| RSS máximo | 257 MiB [239–276] | 100.7 MiB | 100.4 MiB |
+| Commit de 1 documento, p50 | 4.05 ms | 4.07 ms | 13.96 ms |
+| Inserción, 100 documentos por commit | 20,034 doc/s | 18,276 doc/s | 6,570 doc/s |
+| Inserción, 1,000 documentos por commit | 147,773 [142,018–156,463] doc/s | 138,073 [137,860–146,228] doc/s | 57,855 doc/s |
+| Lectura por clave existente, p50 | 0.8 µs | 3.7 µs | 7.2 µs |
+| Agregado count/sum/min/max, p50 | 6.9 ms | 96.9 ms | 97.2 ms |
+| Reapertura con el historial | 101.7 ms [97.6–111.9] | 0.4 ms | 0.1 ms |
+| RSS máximo | 140.9 MiB [140.1–143.5] | 13.6 MiB | 13.5 MiB |
 | Disco tras 10% de actualizaciones y 10% de borrados | 25.8 MiB | 29.0 MiB | 24.3 MiB |
 
 Con 10,000 documentos el resultado es el mismo en forma: commits y lotes
-empatados, lecturas y agregados más rápidos en CedroDB, reapertura de 21.0 ms
-frente a 0.4 ms y una memoria máxima de 34.8 MiB frente a 16.5 MiB.
+empatados, lecturas y agregados más rápidos en CedroDB, reapertura de 20.1 ms
+frente a 0.5 ms y una memoria máxima de 27.6 MiB frente a 11.6 MiB.
 
 ### Qué muestra y qué no
 
 - Un commit durable cuesta lo mismo en ambos motores porque lo domina la espera
   del disco, no el motor. No hay ventaja de escritura.
 - Las lecturas y los agregados de CedroDB son más rápidos porque todos los
-  documentos activos están en RAM. Es una decisión de diseño con un precio: entre
-  dos y dos veces y media la memoria en esta carga (la memoria máxima de CedroDB
-  varía entre ejecuciones; no la interpretes con más precisión de la que tiene), el límite predeterminado de 64 MiB de estado
+  documentos activos están en RAM. Es una decisión de diseño con un precio: unas
+  diez veces la memoria máxima de SQLite en esta carga (133 frente a 13.5 MiB con 100,000
+  documentos; ver la corrección más abajo), el límite predeterminado de 64 MiB de estado
   vivo y la imposibilidad de superar la memoria disponible. SQLite lee desde su
   caché de páginas y no tiene esa restricción.
 - La reapertura de CedroDB crece de forma lineal con el log, porque reproduce
@@ -87,9 +87,27 @@ Nada de lo anterior demuestra una superioridad general frente a SQLite. Sigue
 pendiente comparar con libmdbx, UnQLite y DuckDB, repetir en Linux y en otro
 hardware, medir el arranque en frío y probar un esquema SQLite optimizado.
 
+### Corrección de la cifra de memoria publicada
+
+La primera publicación decía que CedroDB usaba 257 MiB frente a unos 100 MiB de
+SQLite. Esas cifras de RSS máximo **incluían datos del propio arnés**: este generaba
+todo el conjunto de documentos en memoria y, además, clonaba cada valor al
+escribir en CedroDB. Ni 257 MiB ni los ~100 MiB de SQLite describen a los motores. El
+arnés ahora genera los documentos por lote, con la misma ruta para ambos motores, y
+no conserva el conjunto ni clona valores (el modelo de verificación sigue siendo un
+vector de revisiones, sin documentos). Con el arnés corregido (3 ejecuciones, todas
+verificadas) el RSS máximo es 133 MiB para CedroDB y 13.5 MiB para SQLite; los
+resultados anteriores están en `results/superseded/`. La diferencia relativa
+**no** mejoró: SQLite también estaba inflado por el arnés, así que la proporción
+real en esta carga es de aproximadamente 10 a 1, mayor que la publicada. El RSS
+máximo es el de toda la ejecución (carga, actualizaciones, borrados y reapertura),
+no solo el de reabrir. Los tiempos no cambiaron de forma apreciable (la generación
+quedaba fuera de la medición); las diferencias entre tablas son variación entre
+ejecuciones. No se verificó en otro hardware o sistema operativo.
+
 ### Efecto de las optimizaciones de reapertura
 
-Las ejecuciones de arriba usan el código final. Para atribuir la mejora de la
+La tabla de arriba (`batch3`) usa el código con reapertura en paralelo (ventana de 4 MiB). Una ejecución intermedia con ventana de 16 MiB dio 120.9 ms de reapertura pero 222.6 MiB de RSS máximo, por lo que se redujo la ventana; esa ejecución no se conserva. Para atribuir la mejora de la
 reapertura se comparó el código original de `main` con el final **sobre el mismo
 log** (90,000 documentos vivos tras actualizaciones y borrados), alternando 10
 ejecuciones de cada versión en procesos nuevos (`--reopen`): mediana de

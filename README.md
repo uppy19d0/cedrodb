@@ -10,6 +10,36 @@ CedroDB is a Rust engine with native Node.js/TypeScript and Python libraries. Sa
 
 [CLI commands](docs/cli.md) · [Performance tools](docs/performance.md) · [Installation guide](docs/installation.md) · [Agents and retrieval](docs/agents.md) · [Research](docs/ai-research.md) · [Node API](bindings/node/README.md) · [Python API](bindings/python/README.md) · [Backups](docs/backups.md) · [Recipes](docs/use-cases.md) · [Local jobs](docs/jobs.md) · [Changelog](CHANGELOG.md) · [Road to 1.0](docs/roadmap.md) · [Live examples](https://www.ltavarez.me/labs/cedrodb)
 
+## Quick start
+
+```sh
+npm install cedrodb@0.8.0        # Node.js 18+
+python -m pip install cedrodb==0.8.0   # Python 3.9+
+```
+
+```python
+from cedrodb import Database
+
+with Database('./app.cedro') as db:
+    notes = db.collection('notes')
+    notes.put_many({'a': {'state': 'pending'}, 'b': {'state': 'sent'}})
+    notes.create_index('state')
+    page = notes.find_page([{'field': 'state', 'op': 'eq', 'value': 'pending'}])
+    print(page['records'])
+```
+
+For Node.js see the [quick start](https://github.com/uppy19d0/cedrodb/blob/main/bindings/node/README.md#quick-start).
+
+> **What it is not**
+>
+> - **Single process.** One open handle owns a database directory; there is no multi-process access, server or replication.
+> - **Data in RAM.** All live documents and indexes are held in memory (default state limit 64 MiB); it cannot hold more data than fits in memory, and reopening replays the whole log.
+> - **Experimental 0.x.** Not production validated; on-disk and API stability is not promised before 1.0.
+> - **Durable by default, at a cost.** Every commit calls `fsync` (`sync_all`) before it becomes visible; this protects against process kill, not a guarantee against every power-loss or hardware fault.
+> - **No SQL.** Choose SQLite or another mature database when you need SQL, multi-process access or data larger than memory.
+>
+> Measured comparison, including where SQLite wins (reopen time, peak memory): [docs/benchmarks.md](https://github.com/uppy19d0/cedrodb/blob/main/docs/benchmarks.md) (written in Spanish). Single machine, synthetic data; not a general claim.
+
 ## Application fit
 
 | Application | CedroDB provides | The application still owns |

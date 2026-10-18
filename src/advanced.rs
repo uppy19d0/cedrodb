@@ -59,16 +59,34 @@ pub struct Stats {
 }
 
 impl Database {
+    /// One-shot write. Concurrent one-shot callers serialize on the database
+    /// lock; only an active staged `WriteTransaction` returns `WriterBusy`.
     pub fn put(&self, collection: &str, key: &str, value: Value) -> Result<()> {
-        let mut transaction = self.begin_write()?;
-        transaction.put(collection, key, value)?;
-        transaction.commit()
+        validate_user_location(collection, key)?;
+        validate_document(&value, self.options)?;
+        let mut inner = self.lock()?;
+        if inner.writer_active {
+            return Err(Error::WriterBusy);
+        }
+        let operation = Operation::Put {
+            collection: collection.into(),
+            key: key.into(),
+            value,
+        };
+        commit_operations(&mut inner, &[operation], self.options)
     }
 
     pub fn delete(&self, collection: &str, key: &str) -> Result<()> {
-        let mut transaction = self.begin_write()?;
-        transaction.delete(collection, key)?;
-        transaction.commit()
+        validate_user_location(collection, key)?;
+        let mut inner = self.lock()?;
+        if inner.writer_active {
+            return Err(Error::WriterBusy);
+        }
+        let operation = Operation::Delete {
+            collection: collection.into(),
+            key: key.into(),
+        };
+        commit_operations(&mut inner, &[operation], self.options)
     }
 
     /// Compare a complete document and persist its replacement atomically.

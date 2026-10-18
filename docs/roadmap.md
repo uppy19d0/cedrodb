@@ -26,3 +26,5 @@ Each release must solve a concrete application problem, describe failures and pa
 8. Establish typed APIs, error contracts, uncertain-commit handling, security reporting and maintenance expectations.
 
 SQL, approximate vector indexes and distributed replication are not required for this product direction. Bounded ingestion, reject records and restartable imports remain future application work. New features must not replace testing the guarantees already offered.
+
+Design drafts (not commitments): [RFC 0001 relaxed durability](rfcs/0001-relaxed-durability.md), [RFC 0002 snapshot/checkpoint](rfcs/0002-snapshot-checkpoint.md). Process: [rfcs/README.md](rfcs/README.md).

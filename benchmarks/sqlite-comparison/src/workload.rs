@@ -102,15 +102,23 @@ fn aggregate_matches(actual: &AggregateResult, expected: &AggregateResult) -> bo
     actual.count == expected.count && actual.sum == expected.sum && actual.min == expected.min && actual.max == expected.max
 }
 
-fn commit_in_batches(engine: &mut dyn Engine, items: Vec<(String, Value)>, batch: usize) -> (Duration, Vec<Duration>) {
+/// Generates each batch just before its commit (outside the timed region) and drops it afterwards, so the
+/// harness never holds the whole dataset. Both engines go through this same path.
+fn commit_in_batches(engine: &mut dyn Engine, documents: u64, batch: usize) -> (Duration, Vec<Duration>) {
     let mut latencies = Vec::new();
-    let started = Instant::now();
-    for chunk in items.chunks(batch) {
+    let mut total = Duration::ZERO;
+    let mut start = 0u64;
+    while start < documents {
+        let end = (start + batch as u64).min(documents);
+        let items: Vec<(String, Value)> = (start..end).map(|i| (key(i), document(i, 0))).collect();
         let before = Instant::now();
-        engine.commit_puts(chunk);
-        latencies.push(before.elapsed());
+        engine.commit_puts(items);
+        let elapsed = before.elapsed();
+        total += elapsed;
+        latencies.push(elapsed);
+        start = end;
     }
-    (started.elapsed(), latencies)
+    (total, latencies)
 }
 
 pub fn run(name: &str, config: &Config) -> Value {
@@ -128,8 +136,7 @@ pub fn run(name: &str, config: &Config) -> Value {
         let directory = root.join(format!("insert-{batch}"));
         engine.open(&directory);
         let documents = if batch == 1 { n.min(config.single_commit_limit) } else { n };
-        let items: Vec<(String, Value)> = (0..documents).map(|i| (key(i), document(i, 0))).collect();
-        let (total, latencies) = commit_in_batches(engine.as_mut(), items, batch);
+        let (total, latencies) = commit_in_batches(engine.as_mut(), documents, batch);
         inserts.push(json!({
             "documents_per_commit": batch, "documents": documents, "commits": latencies.len(),
             "total_ms": total.as_secs_f64() * 1e3, "documents_per_second": documents as f64 / total.as_secs_f64(),
@@ -207,7 +214,7 @@ pub fn run(name: &str, config: &Config) -> Value {
     for chunk in update_ids.chunks(100) {
         let items: Vec<(String, Value)> = chunk.iter().map(|&i| (key(i), document(i, 1))).collect();
         let before = Instant::now();
-        engine.commit_puts(&items);
+        engine.commit_puts(items);
         update_latencies.push(before.elapsed());
     }
     let update_total = update_started.elapsed();

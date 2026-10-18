@@ -27,10 +27,16 @@ Transaction order and cursors are preserved. A cursor newer than an older backup
 
 ## Limits
 
+Content limits (`max_document_bytes`, `max_frame_bytes`, `max_state_bytes`) are caller policy and are not stored in the log. Never lower them for an existing database: opening it with smaller limits fails with `LimitExceeded` (not `Corruption`) and leaves the file unchanged; reopen with the original or larger limits.
+
 - Copying uses a 64 KiB buffer, but verification replays live data into additional RAM and decodes frames. Total memory is not limited to that buffer.
 - Backups include the full growing log. There are no incremental backups, retention scheduler, remote uploads or automatic failover.
 - Files are synchronized before success; final durability depends on filesystem/OS/device behavior. Directory sync support is platform-dependent.
-- Failed-operation cleanup is best effort and removes only newly created files/directories. A process crash may leave a partial destination; use a fresh destination when retrying.
+- Failed-operation cleanup is best effort and removes only newly created files/directories. Restore builds in a hidden sibling directory (`.NAME.PID.N.restoring`) and renames it to the destination only when complete, so a crash never leaves a partial destination at the final name; it may leave that hidden directory, which is safe to delete. The existing-destination check precedes the rename, leaving a narrow race with a concurrent creator of an empty directory at the same name. Not tested under real process kills.
 - Keep copies on separate storage to protect against device failure, and apply OS encryption/access controls where needed.
 
 Executable examples: [Node offline backup](../bindings/node/examples/offline-backup.mjs), [Python offline forms](../bindings/python/examples/offline_forms.py).
+
+## Format fixtures
+
+`tests/fixtures/v1-log.bin` and `v1-backup.bin` pin the version-1 log and backup bytes; `tests/format_fixtures.rs` checks that they open, verify, restore and match the current writer. A deliberate format change must regenerate them (command in the test header) and bump the format version. Mutation tests there are seeded and deterministic; coverage-guided fuzzing is not yet set up.
