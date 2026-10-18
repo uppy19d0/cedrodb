@@ -30,7 +30,7 @@ Transaction order and cursors are preserved. A cursor newer than an older backup
 - Copying uses a 64 KiB buffer, but verification replays live data into additional RAM and decodes frames. Total memory is not limited to that buffer.
 - Backups include the full growing log. There are no incremental backups, retention scheduler, remote uploads or automatic failover.
 - Files are synchronized before success; final durability depends on filesystem/OS/device behavior. Directory sync support is platform-dependent.
-- Failed-operation cleanup is best effort and removes only newly created files/directories. A process crash may leave a partial destination; use a fresh destination when retrying.
+- Failed-operation cleanup is best effort and removes only newly created files/directories. Restore builds in a hidden sibling directory (`.NAME.PID.N.restoring`) and renames it to the destination only when complete, so a crash never leaves a partial destination at the final name; it may leave that hidden directory, which is safe to delete. The existing-destination check precedes the rename, leaving a narrow race with a concurrent creator of an empty directory at the same name. Not tested under real process kills.
 - Keep copies on separate storage to protect against device failure, and apply OS encryption/access controls where needed.
 
 Executable examples: [Node offline backup](../bindings/node/examples/offline-backup.mjs), [Python offline forms](../bindings/python/examples/offline_forms.py).

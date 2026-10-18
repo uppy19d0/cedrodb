@@ -1,6 +1,7 @@
 //! Read-only log verification and versioned, checksummed full-history backups.
 
 use super::*;
+use std::path::PathBuf;
 
 const BACKUP_MAGIC: &[u8; 16] = b"CEDROBAK\0\x01\0\0\0\0\0\0";
 const BACKUP_HEADER_BYTES: u64 = 32;
@@ -108,16 +109,21 @@ impl Database {
             ));
         }
         let destination = destination.as_ref();
-        fs::create_dir(destination)?;
-        let log_path = destination.join("cedro.log");
-        let mut owns_log = false;
+        // Refuse an existing destination up front (also dangling symlinks).
+        if fs::symlink_metadata(destination).is_ok() {
+            return Err(Error::Io(io::Error::from(io::ErrorKind::AlreadyExists)));
+        }
+        // Build in a private sibling directory and publish it by rename only
+        // when complete, so the final name never holds a partial restore.
+        let staging = staging_path(destination)?;
+        fs::create_dir(&staging)?;
+        let log_path = staging.join("cedro.log");
         let outcome = (|| {
             let mut target = OpenOptions::new()
                 .read(true)
                 .write(true)
                 .create_new(true)
                 .open(&log_path)?;
-            owns_log = true;
             lock_exclusive(&target)?;
             source.seek(SeekFrom::Start(BACKUP_HEADER_BYTES))?;
             let copied_checksum = copy_checked(&mut source, &mut target, log_bytes)?;
@@ -129,18 +135,34 @@ impl Database {
                 ));
             }
             target.sync_all()?;
-            sync_directory(destination)?;
+            sync_directory(&staging)?;
+            drop(target);
+            fs::rename(&staging, destination)?;
             sync_directory(parent_directory(destination))?;
             Ok(verified.report)
         })();
-        if outcome.is_err() {
-            if owns_log {
-                let _ = fs::remove_file(&log_path);
-            }
-            let _ = fs::remove_dir(destination);
+        if outcome.is_err() && fs::symlink_metadata(&staging).is_ok() {
+            let _ = fs::remove_file(&log_path);
+            let _ = fs::remove_dir(&staging);
         }
         outcome
     }
+}
+
+/// Private sibling name for building a directory before publishing it.
+fn staging_path(destination: &Path) -> Result<PathBuf> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let name = destination
+        .file_name()
+        .ok_or_else(|| Error::Io(io::Error::from(io::ErrorKind::InvalidInput)))?;
+    let mut temp = std::ffi::OsString::from(".");
+    temp.push(name);
+    temp.push(format!(
+        ".{}.{}.restoring",
+        std::process::id(),
+        NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    Ok(parent_directory(destination).join(temp))
 }
 
 fn parent_directory(path: &Path) -> &Path {
