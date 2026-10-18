@@ -2,10 +2,10 @@
 
 The Python distribution now registers the `cedrodb` executable. It is included from 0.8.0; previously published 0.7.0 artifacts contain only the older `python -m cedrodb doctor` and `benchmark` commands.
 
-Install the 0.8.0 Python package or build its wheel from this checkout:
+Install the 0.9.0 Python package or build its wheel from this checkout:
 
 ```sh
-python -m pip install cedrodb==0.8.0
+python -m pip install cedrodb==0.9.0
 cedrodb --help
 cedrodb --version
 cedrodb init --db ./local-data
