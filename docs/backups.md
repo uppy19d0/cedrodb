@@ -27,6 +27,8 @@ Transaction order and cursors are preserved. A cursor newer than an older backup
 
 ## Limits
 
+Content limits (`max_document_bytes`, `max_frame_bytes`, `max_state_bytes`) are caller policy and are not stored in the log. Never lower them for an existing database: opening it with smaller limits fails with `LimitExceeded` (not `Corruption`) and leaves the file unchanged; reopen with the original or larger limits.
+
 - Copying uses a 64 KiB buffer, but verification replays live data into additional RAM and decodes frames. Total memory is not limited to that buffer.
 - Backups include the full growing log. There are no incremental backups, retention scheduler, remote uploads or automatic failover.
 - Files are synchronized before success; final durability depends on filesystem/OS/device behavior. Directory sync support is platform-dependent.

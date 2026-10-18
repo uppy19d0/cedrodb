@@ -893,9 +893,16 @@ fn recover(file: &mut File, options: Options) -> Result<(State, Vec<u64>)> {
         }
         let payload_bytes = payload_length as usize;
         let checksum = u32::from_le_bytes(frame_header[8..12].try_into().unwrap());
-        if payload_bytes < EMPTY_BATCH_BYTES || payload_bytes > options.max_frame_bytes {
+        if payload_bytes < EMPTY_BATCH_BYTES {
             return Err(Error::Corruption(format!(
                 "invalid frame length {payload_bytes} at byte {offset}"
+            )));
+        }
+        if payload_bytes > options.max_frame_bytes {
+            return Err(Error::LimitExceeded(format!(
+                "frame of {payload_bytes} bytes at byte {offset} exceeds max_frame_bytes {}; \
+                 reopen with the limits the log was written with (limits must not shrink)",
+                options.max_frame_bytes
             )));
         }
         let frame_bytes = FRAME_HEADER_BYTES as u64 + payload_bytes as u64;
@@ -914,8 +921,14 @@ fn recover(file: &mut File, options: Options) -> Result<(State, Vec<u64>)> {
             Error::Corruption(format!("invalid transaction at byte {offset}: {error}"))
         })?;
         let (changes, state_bytes) =
-            prepare_changes_owned(&state, batch.ops, options).map_err(|error| {
-                Error::Corruption(format!("invalid transaction at byte {offset}: {error}"))
+            prepare_changes_owned(&state, batch.ops, options).map_err(|error| match error {
+                Error::LimitExceeded(message) => Error::LimitExceeded(format!(
+                    "transaction at byte {offset}: {message}; reopen with the limits the log \
+                     was written with (limits must not shrink)"
+                )),
+                error => {
+                    Error::Corruption(format!("invalid transaction at byte {offset}: {error}"))
+                }
             })?;
         apply_changes(&mut state, changes, state_bytes);
         frame_offsets.push(offset);
