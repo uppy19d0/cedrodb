@@ -26,8 +26,11 @@ jobs:
   validate:
     if: inputs.npm || inputs.python
     runs-on: ubuntu-22.04
+    outputs:
+      head_sha: ${{ steps.check.outputs.head_sha }}
     steps:
       - name: Validate the supplied run and its artifacts
+        id: check
         env:
           GH_TOKEN: ${{ github.token }}
           RUN_ID: ${{ inputs.run_id }}
@@ -46,7 +49,10 @@ jobs:
           check conclusion success "$(jq -r .conclusion <<<"$run")"
           check head_branch main "$(jq -r .head_branch <<<"$run")"
           check event push "$(jq -r .event <<<"$run")"
-          echo "run $RUN_ID head_sha $(jq -r .head_sha <<<"$run")"
+          head_sha=$(jq -r .head_sha <<<"$run")
+          case "$head_sha" in *[!0-9a-f]*|'') echo "bad head_sha '$head_sha'" >&2; exit 1;; esac
+          echo "run $RUN_ID head_sha $head_sha"
+          echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
           names=$(gh api --paginate "repos/$GITHUB_REPOSITORY/actions/runs/$RUN_ID/artifacts" \
             --jq '.artifacts[] | select(.expired | not) | .name')
           need() { grep -qx "$1" <<<"$names" || { echo "missing artifact: $1" >&2; exit 1; }; }
@@ -57,6 +63,8 @@ jobs:
               need "pywheel-$label"
               need "wheel-smoke-$label"
             done
+            need wheel-smoke-manylinux-x86_64-py3.9
+            need wheel-smoke-manylinux-x86_64-py3.13
           fi
           echo "validation passed"
 
@@ -71,6 +79,8 @@ jobs:
       id-token: write
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.validate.outputs.head_sha }}
       - uses: actions/setup-node@v4
         with:
           node-version: 24

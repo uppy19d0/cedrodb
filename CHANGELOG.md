@@ -4,6 +4,8 @@ All releases remain experimental. Future work is separate in [the roadmap](docs/
 
 ## Unreleased
 
+- CI hardening (workflows only, no library change): the manylinux x86_64 wheel is now also smoke-tested on Python 3.9 and 3.13 (new `wheel-smoke-manylinux-x86_64-py3.9` / `-py3.13` artifacts, which `publish-registries.yml` now requires for PyPI; existing artifact names unchanged); smoke jobs have `timeout-minutes: 20`; the publish `validate` job exposes the validated run's `head_sha` and the npm job checks out that commit, so `check-npm-tarball.py` reads the platform list of the code that was built rather than the current `main`. Workflows were validated as YAML only and NOT executed; the first real run may need fixes.
+
 ## 0.9.0 — 2026-10-18
 
 - Docs only: added `docs/rfcs/` with the RFC process and two drafts, 0001 relaxed durability (opt-in bounded-loss mode with explicit flush; default stays Sync; the RFC itself questions whether it fits a durable-state product) and 0002 snapshot/checkpoint for faster reopen (gain stated as an unmeasured hypothesis). Nothing is implemented; no code or format change.
