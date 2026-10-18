@@ -372,6 +372,7 @@ fn restore_publishes_destination_only_when_complete_and_leaves_no_staging() {
                     "partial restore visible at the final name"
                 );
             }
+            std::thread::yield_now();
         }
     });
     Database::restore_backup(&backup, &destination).unwrap();

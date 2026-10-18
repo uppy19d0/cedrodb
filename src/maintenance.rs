@@ -213,9 +213,9 @@ fn publish_atomically(path: &Path, write: impl FnOnce(&mut File) -> Result<()>) 
     })();
     drop(file);
     // The temp name is exclusively ours; the final name is never removed.
-    let removed = fs::remove_file(&temp);
+    // After a successful link the backup is published; a leftover temp name is harmless.
+    let _ = fs::remove_file(&temp);
     outcome?;
-    removed?;
     sync_directory(directory)
 }
 

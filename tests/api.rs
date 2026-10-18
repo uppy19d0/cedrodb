@@ -325,7 +325,11 @@ fn concurrent_one_shot_puts_serialize_instead_of_writer_busy() {
     for h in handles {
         h.join().unwrap();
     }
-    assert_eq!(db.get("c", "k7-49").unwrap().unwrap()["i"], 49);
+    for t in 0..8 {
+        for i in 0..50 {
+            assert_eq!(db.get("c", &format!("k{t}-{i}")).unwrap().unwrap()["i"], i);
+        }
+    }
 }
 
 #[test]
