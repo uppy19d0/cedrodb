@@ -152,6 +152,8 @@ jobs:
           working-directory: bindings/python
           command: sdist
           args: --out dist
+      # verify_sdist builds with --no-build-isolation, so maturin must be importable here.
+      - run: python -m pip install 'maturin>=1.15,<2'
       - run: python bindings/python/scripts/verify_sdist.py bindings/python/dist/*.tar.gz
       - uses: actions/upload-artifact@v4
         with:
