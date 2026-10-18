@@ -36,3 +36,7 @@ Content limits (`max_document_bytes`, `max_frame_bytes`, `max_state_bytes`) are 
 - Keep copies on separate storage to protect against device failure, and apply OS encryption/access controls where needed.
 
 Executable examples: [Node offline backup](../bindings/node/examples/offline-backup.mjs), [Python offline forms](../bindings/python/examples/offline_forms.py).
+
+## Format fixtures
+
+`tests/fixtures/v1-log.bin` and `v1-backup.bin` pin the version-1 log and backup bytes; `tests/format_fixtures.rs` checks that they open, verify, restore and match the current writer. A deliberate format change must regenerate them (command in the test header) and bump the format version. Mutation tests there are seeded and deterministic; coverage-guided fuzzing is not yet set up.
