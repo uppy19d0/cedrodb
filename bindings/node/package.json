@@ -54,6 +54,9 @@
     "url": "git+https://github.com/uppy19d0/cedrodb.git",
     "directory": "bindings/node"
   },
+  "bugs": {
+    "url": "https://github.com/uppy19d0/cedrodb/issues"
+  },
   "author": "Luis Tavarez",
   "keywords": [
     "database",
@@ -71,6 +74,9 @@
     "checkpoints",
     "vector-search",
     "hybrid-search",
-    "local-first"
+    "local-first",
+    "json",
+    "append-only-log",
+    "napi"
   ]
 }
