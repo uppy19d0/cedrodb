@@ -1,0 +1,20 @@
+# Standalone crate: the CedroDB engine keeps its small dependency set, and SQLite
+# (bundled, so the version is pinned by Cargo.lock) is only needed to run comparisons.
+[package]
+name = "cedrodb-sqlite-comparison"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Reproducible CedroDB vs SQLite benchmark (not part of the published crate)"
+
+[dependencies]
+cedrodb = { path = "../.." }
+libc = "0.2"
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = "1"
+
+# Detach from any parent workspace so this crate has its own lockfile and target directory.
+[workspace]
+
+[profile.release]
+debug = false

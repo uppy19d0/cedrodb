@@ -2,6 +2,11 @@
 
 All releases remain experimental. Future work is separate in [the roadmap](docs/roadmap.md).
 
+## Unreleased
+
+- Faster log replay: measure each document once when preparing a transaction (it was serialized twice), move documents into the state instead of cloning them while replaying the log or verifying a backup, and read each operation directly instead of through serde's internally tagged enum buffer. Reopening a 90,000-document log is about 32% faster (median 277 ms to 187 ms, alternating A/B on the same log). Behavior, errors and the log format are unchanged; the accepted operation shapes are covered by new tests.
+- Added `benchmarks/sqlite-comparison`, a standalone reproducible CedroDB vs SQLite harness with verified workloads, equivalent durability settings, per-engine processes, repeated runs and published results. It shows no write advantage, faster in-memory reads and aggregates, and slower reopening and higher memory use; see `docs/benchmarks.md`.
+
 ## 0.8.0 — 2026-10-16
 
 - Added the `cedrodb` console command to the Python package, sharing its implementation with `python -m cedrodb`.
