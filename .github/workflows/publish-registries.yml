@@ -30,6 +30,7 @@ jobs:
       actions: read
       id-token: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -40,6 +41,10 @@ jobs:
           run-id: ${{ inputs.run_id }}
           name: distributions
           path: dist
+      - name: Verify tarball contains every prebuilt native engine
+        run: |
+          set -e
+          for f in dist/downloads/*.tgz; do python3 scripts/check-npm-tarball.py "$f"; done
       - run: npm publish dist/downloads/*.tgz --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
