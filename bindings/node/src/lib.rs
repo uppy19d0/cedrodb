@@ -4,19 +4,69 @@ use cedrodb::{
     AgentStatus, ChangeOperation, CheckpointOptions, Condition, Database, EnqueueOptions, Options,
     Query, SearchQuery,
 };
-use napi::{Error, Result, Status};
+use napi::Error;
 use napi_derive::napi;
 use serde::Deserialize;
 use serde_json::Value;
 
 const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
 
-fn invalid(message: impl Into<String>) -> Error {
-    Error::new(Status::InvalidArg, message.into())
+// Stable machine-readable codes, surfaced to JavaScript as `error.code`.
+// napi uses the status string as the `code` property; messages are unchanged.
+#[derive(Clone, Copy, Debug)]
+pub enum Code {
+    Io,
+    Serialization,
+    Corruption,
+    LimitExceeded,
+    InvalidInput,
+    DatabaseLocked,
+    WriterBusy,
+    Poisoned,
+    Closed,
+    Unknown,
 }
 
-fn engine_error(error: cedrodb::Error) -> Error {
-    Error::new(Status::GenericFailure, error.to_string())
+impl AsRef<str> for Code {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Io => "CEDRO_IO",
+            Self::Serialization => "CEDRO_SERIALIZATION",
+            Self::Corruption => "CEDRO_CORRUPTION",
+            Self::LimitExceeded => "CEDRO_LIMIT_EXCEEDED",
+            Self::InvalidInput => "CEDRO_INVALID_INPUT",
+            Self::DatabaseLocked => "CEDRO_DATABASE_LOCKED",
+            Self::WriterBusy => "CEDRO_WRITER_BUSY",
+            Self::Poisoned => "CEDRO_POISONED",
+            Self::Closed => "CEDRO_CLOSED",
+            Self::Unknown => "CEDRO_UNKNOWN",
+        }
+    }
+}
+
+type Result<T> = napi::Result<T, Code>;
+
+fn invalid(message: impl Into<String>) -> Error<Code> {
+    Error::new(Code::InvalidInput, message.into())
+}
+
+fn engine_code(error: &cedrodb::Error) -> Code {
+    match error {
+        cedrodb::Error::Io(_) => Code::Io,
+        cedrodb::Error::Serialization(_) => Code::Serialization,
+        cedrodb::Error::Corruption(_) => Code::Corruption,
+        cedrodb::Error::LimitExceeded(_) => Code::LimitExceeded,
+        cedrodb::Error::InvalidInput(_) => Code::InvalidInput,
+        cedrodb::Error::DatabaseLocked => Code::DatabaseLocked,
+        cedrodb::Error::WriterBusy => Code::WriterBusy,
+        cedrodb::Error::Poisoned => Code::Poisoned,
+        #[allow(unreachable_patterns)]
+        _ => Code::Unknown,
+    }
+}
+
+fn engine_error(error: cedrodb::Error) -> Error<Code> {
+    Error::new(engine_code(&error), error.to_string())
 }
 
 fn decode<T: serde::de::DeserializeOwned>(json: &str) -> Result<T> {
@@ -195,7 +245,7 @@ impl NativeDatabase {
     fn database(&self) -> Result<&Database> {
         self.database
             .as_ref()
-            .ok_or_else(|| Error::new(Status::GenericFailure, "CedroDB database is closed"))
+            .ok_or_else(|| Error::new(Code::Closed, "CedroDB database is closed"))
     }
 }
 
@@ -554,5 +604,36 @@ impl NativeDatabase {
                 .aggregate(&collection, &field)
                 .map_err(engine_error)?,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_engine_variant_has_a_stable_code() {
+        let io = cedrodb::Error::Io(std::io::Error::other("x"));
+        let json = cedrodb::Error::Serialization(serde_json::from_str::<u8>("x").unwrap_err());
+        let cases = [
+            (io, "CEDRO_IO"),
+            (json, "CEDRO_SERIALIZATION"),
+            (cedrodb::Error::Corruption("x".into()), "CEDRO_CORRUPTION"),
+            (
+                cedrodb::Error::LimitExceeded("x".into()),
+                "CEDRO_LIMIT_EXCEEDED",
+            ),
+            (
+                cedrodb::Error::InvalidInput("x".into()),
+                "CEDRO_INVALID_INPUT",
+            ),
+            (cedrodb::Error::DatabaseLocked, "CEDRO_DATABASE_LOCKED"),
+            (cedrodb::Error::WriterBusy, "CEDRO_WRITER_BUSY"),
+            (cedrodb::Error::Poisoned, "CEDRO_POISONED"),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(engine_code(&error).as_ref(), expected);
+        }
+        assert_eq!(Code::Closed.as_ref(), "CEDRO_CLOSED");
     }
 }

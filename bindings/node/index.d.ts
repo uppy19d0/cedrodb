@@ -173,3 +173,18 @@ export class AgentStore<T extends JsonValue = JsonValue> {
   checkpoint(threadId: string, state: T, options?: CheckpointOptions): CheckpointResult<T>;
 }
 export const version: '0.9.0';
+
+/** Stable `code` values carried by errors thrown from the native engine. Messages are unchanged. */
+export declare const ErrorCode: {
+  readonly IO: 'CEDRO_IO';
+  readonly SERIALIZATION: 'CEDRO_SERIALIZATION';
+  readonly CORRUPTION: 'CEDRO_CORRUPTION';
+  readonly LIMIT_EXCEEDED: 'CEDRO_LIMIT_EXCEEDED';
+  readonly INVALID_INPUT: 'CEDRO_INVALID_INPUT';
+  readonly DATABASE_LOCKED: 'CEDRO_DATABASE_LOCKED';
+  readonly WRITER_BUSY: 'CEDRO_WRITER_BUSY';
+  readonly POISONED: 'CEDRO_POISONED';
+  readonly CLOSED: 'CEDRO_CLOSED';
+  readonly UNKNOWN: 'CEDRO_UNKNOWN';
+};
+export type ErrorCode = (typeof ErrorCode)[keyof typeof ErrorCode];

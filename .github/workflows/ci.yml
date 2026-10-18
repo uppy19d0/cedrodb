@@ -166,6 +166,8 @@ jobs:
   # wheel-smoke-<label> artifact is the evidence publishing requires.
   wheel-smoke:
     needs: wheels
+    # Bounds hung runners (notably the arm64 one); applies to every matrix entry.
+    timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
@@ -210,10 +212,48 @@ jobs:
           path: smoke-result/*.txt
           if-no-files-found: error
 
+  # The abi3 manylinux x86_64 wheel must also work on the oldest and newest
+  # supported interpreters (the job above covers 3.11). Same clean-venv smoke.
+  wheel-smoke-manylinux-pyversions:
+    needs: wheels
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.9', '3.13']
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: pywheel-manylinux-x86_64
+          path: wheelhouse
+      - name: Install the wheel in a clean venv and run the smoke script
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/smoke-venv"
+          "$RUNNER_TEMP/smoke-venv/bin/python" -m pip install --no-index --no-deps wheelhouse/*.whl
+          SCRIPT="$PWD/bindings/python/scripts/smoke_wheel.py"
+          mkdir "$RUNNER_TEMP/smoke-cwd"
+          cd "$RUNNER_TEMP/smoke-cwd"
+          "$RUNNER_TEMP/smoke-venv/bin/python" -I "$SCRIPT"
+          cd - >/dev/null
+          mkdir -p smoke-result
+          { echo "label=manylinux-x86_64-py${{ matrix.python-version }}"; echo "result=ok"; ls wheelhouse; } > smoke-result/manylinux-x86_64-py${{ matrix.python-version }}.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-smoke-manylinux-x86_64-py${{ matrix.python-version }}
+          path: smoke-result/*.txt
+          if-no-files-found: error
+
   # musllinux wheel: smoke inside an Alpine container via docker run, so no
   # JavaScript actions have to run inside the Alpine image.
   wheel-smoke-musl:
     needs: wheels
+    timeout-minutes: 20
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v5
@@ -238,7 +278,7 @@ jobs:
           if-no-files-found: error
 
   distributions:
-    needs: [test, native]
+    needs: [test, native, wheels, sdist, wheel-smoke, wheel-smoke-manylinux-pyversions, wheel-smoke-musl]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-22.04
     steps:
@@ -255,11 +295,23 @@ jobs:
           pattern: node-*
           path: bindings/node/prebuilds
           merge-multiple: true
+      # Python files come from the published matrix (six smoke-tested wheels plus
+      # the verified sdist), not from the native job, so the site offers exactly
+      # what publish-registries.yml sends to PyPI.
       - uses: actions/download-artifact@v4
         with:
-          pattern: python-*
+          pattern: pywheel-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: pysdist
+          path: dist
+      - name: Require the full Python set
+        run: |
+          ls dist
+          test "$(ls dist/*.whl | wc -l)" -eq 6
+          test "$(ls dist/*.tar.gz | wc -l)" -eq 1
       - run: npm pack ./bindings/node --pack-destination dist
       - run: python scripts/package-portfolio.py --portfolio /tmp/cedrodb-site --sdk-dir dist
       - uses: actions/upload-artifact@v4

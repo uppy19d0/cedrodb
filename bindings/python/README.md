@@ -666,6 +666,23 @@ before mutation. Supported integers round-trip exactly. JSON depth is limited
 to 64 levels, and the transport always uses `allow_nan=False`. Type annotations
 and a `py.typed` marker are included.
 
+Every `CedroError` (including `DatabaseClosedError`) has a stable string `code` attribute with the same values as the Node binding's `ErrorCode`; the exception types and messages are unchanged. `cedrodb.ERROR_CODES` lists them. Use-after-close and a finished transaction report `CEDRO_CLOSED`.
+
+| Code | Meaning |
+| --- | --- |
+| `CEDRO_IO` | Operating-system I/O failure (after a commit I/O error, close and reopen) |
+| `CEDRO_SERIALIZATION` | JSON encoding or decoding failure inside the engine |
+| `CEDRO_CORRUPTION` | The log or backup failed validation |
+| `CEDRO_LIMIT_EXCEEDED` | A document, frame, state or scan limit was exceeded |
+| `CEDRO_INVALID_INPUT` | The engine rejected the input (reserved names, bad cursors and similar) |
+| `CEDRO_DATABASE_LOCKED` | Another handle or process has the database open |
+| `CEDRO_WRITER_BUSY` | Another write transaction is active |
+| `CEDRO_POISONED` | The handle is poisoned; close and reopen it |
+| `CEDRO_CLOSED` | The database was closed |
+| `CEDRO_UNKNOWN` | An engine error variant this binding does not know yet |
+
+`CEDRO_WRITER_BUSY` and `CEDRO_POISONED` are mapped and unit-tested in the Rust bridge, but the binding's whole-call writes make them hard to trigger on purpose, so they have no end-to-end test.
+
 ## Current limits
 
 - One open owning handle/process per directory; its native calls are serialized.

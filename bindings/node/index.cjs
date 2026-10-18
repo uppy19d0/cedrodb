@@ -580,4 +580,18 @@ class Queue {
   }
 }
 
-module.exports = { Database, Collection, Queue, AgentStore, version: '0.9.0' };
+// Stable `error.code` values for errors raised by the native engine. Messages are unchanged.
+const ErrorCode = Object.freeze({
+  IO: 'CEDRO_IO',
+  SERIALIZATION: 'CEDRO_SERIALIZATION',
+  CORRUPTION: 'CEDRO_CORRUPTION',
+  LIMIT_EXCEEDED: 'CEDRO_LIMIT_EXCEEDED',
+  INVALID_INPUT: 'CEDRO_INVALID_INPUT',
+  DATABASE_LOCKED: 'CEDRO_DATABASE_LOCKED',
+  WRITER_BUSY: 'CEDRO_WRITER_BUSY',
+  POISONED: 'CEDRO_POISONED',
+  CLOSED: 'CEDRO_CLOSED',
+  UNKNOWN: 'CEDRO_UNKNOWN',
+});
+
+module.exports = { Database, Collection, Queue, AgentStore, ErrorCode, version: '0.9.0' };

@@ -418,6 +418,32 @@ Verification and backup hold the database lock and replay documents into additio
 
 Complete TypeScript declarations are included for both ESM and CommonJS, including typed `Queue`, `Job`, `LeasedJob`, `AgentStore`, `AgentCheckpoint`, `SearchPage`, `Diagnostics`, `QueryProfile` and `SearchProfile` exports. Profiles preserve the collection's declared document type. Calls on retained collections, queues and agent stores fail after their database closes.
 
+### Error codes
+
+Errors raised by the native engine carry a stable string `code` property; `message` text is unchanged. `ErrorCode` (exported, frozen, typed) lists the values. Argument validation done in JavaScript still throws `TypeError` or `RangeError` without a `code`.
+
+| Code | Meaning |
+| --- | --- |
+| `CEDRO_IO` | Operating-system I/O failure (after a commit I/O error, close and reopen) |
+| `CEDRO_SERIALIZATION` | JSON encoding or decoding failure inside the engine |
+| `CEDRO_CORRUPTION` | The log or backup failed validation |
+| `CEDRO_LIMIT_EXCEEDED` | A document, frame, state or scan limit was exceeded |
+| `CEDRO_INVALID_INPUT` | The engine rejected the input (reserved names, bad cursors and similar) |
+| `CEDRO_DATABASE_LOCKED` | Another handle or process has the database open |
+| `CEDRO_WRITER_BUSY` | Another write transaction is active |
+| `CEDRO_POISONED` | The handle is poisoned; close and reopen it |
+| `CEDRO_CLOSED` | The database was closed |
+| `CEDRO_UNKNOWN` | An engine error variant this binding does not know yet |
+
+`CEDRO_WRITER_BUSY` and `CEDRO_POISONED` are mapped and unit-tested in the Rust bridge, but the binding's whole-call writes make them hard to trigger on purpose, so they have no end-to-end test.
+
+```js
+const { Database, ErrorCode } = require('cedrodb');
+try { new Database(path); } catch (error) {
+  if (error.code === ErrorCode.DATABASE_LOCKED) { /* another handle owns it */ }
+}
+```
+
 ## Python interoperability and JSON rules
 
 Node.js and Python use the same storage engine and log format. Close the Node handle before opening the same directory in Python:

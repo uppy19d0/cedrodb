@@ -14,8 +14,32 @@ use std::sync::Mutex;
 pyo3::create_exception!(_native, CedroError, PyRuntimeError);
 pyo3::create_exception!(_native, DatabaseClosedError, CedroError);
 
+/// Stable machine-readable code for an engine error, shared with the Node binding.
+fn engine_code(error: &cedrodb::Error) -> &'static str {
+    match error {
+        cedrodb::Error::Io(_) => "CEDRO_IO",
+        cedrodb::Error::Serialization(_) => "CEDRO_SERIALIZATION",
+        cedrodb::Error::Corruption(_) => "CEDRO_CORRUPTION",
+        cedrodb::Error::LimitExceeded(_) => "CEDRO_LIMIT_EXCEEDED",
+        cedrodb::Error::InvalidInput(_) => "CEDRO_INVALID_INPUT",
+        cedrodb::Error::DatabaseLocked => "CEDRO_DATABASE_LOCKED",
+        cedrodb::Error::WriterBusy => "CEDRO_WRITER_BUSY",
+        cedrodb::Error::Poisoned => "CEDRO_POISONED",
+        #[allow(unreachable_patterns)]
+        _ => "CEDRO_UNKNOWN",
+    }
+}
+
+/// Attaches the `code` attribute; the exception type and message are unchanged.
+fn with_code(error: PyErr, code: &'static str) -> PyErr {
+    Python::attach(|py| {
+        let _ = error.value(py).setattr("code", code);
+    });
+    error
+}
+
 fn engine_error(error: cedrodb::Error) -> PyErr {
-    CedroError::new_err(error.to_string())
+    with_code(CedroError::new_err(error.to_string()), engine_code(&error))
 }
 
 fn parse<T: for<'de> Deserialize<'de>>(encoded: &str) -> PyResult<T> {
@@ -135,13 +159,18 @@ struct NativeDatabase {
 
 impl NativeDatabase {
     fn with_database<T>(&self, call: impl FnOnce(&Database) -> PyResult<T>) -> PyResult<T> {
-        let guard = self
-            .inner
-            .lock()
-            .map_err(|_| CedroError::new_err("native database mutex is poisoned"))?;
-        let database = guard
-            .as_ref()
-            .ok_or_else(|| DatabaseClosedError::new_err("database is closed"))?;
+        let guard = self.inner.lock().map_err(|_| {
+            with_code(
+                CedroError::new_err("native database mutex is poisoned"),
+                "CEDRO_POISONED",
+            )
+        })?;
+        let database = guard.as_ref().ok_or_else(|| {
+            with_code(
+                DatabaseClosedError::new_err("database is closed"),
+                "CEDRO_CLOSED",
+            )
+        })?;
         call(database)
     }
 }
@@ -183,10 +212,12 @@ impl NativeDatabase {
 
     #[getter]
     fn closed(&self) -> PyResult<bool> {
-        self.inner
-            .lock()
-            .map(|guard| guard.is_none())
-            .map_err(|_| CedroError::new_err("native database mutex is poisoned"))
+        self.inner.lock().map(|guard| guard.is_none()).map_err(|_| {
+            with_code(
+                CedroError::new_err("native database mutex is poisoned"),
+                "CEDRO_POISONED",
+            )
+        })
     }
 
     fn get_json(&self, py: Python<'_>, collection: &str, key: &str) -> PyResult<Option<String>> {
