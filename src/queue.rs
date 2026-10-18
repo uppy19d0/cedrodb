@@ -179,9 +179,30 @@ fn validate_payload_numbers(payload: &Value) -> Result<()> {
     Ok(())
 }
 
-fn read_job(key: &str, document: &Document) -> Result<Job> {
-    let job: Job =
-        serde_json::from_value(document.value.clone()).map_err(|error| corruption(key, error))?;
+/// Job fields without the payload, read in place from the stored document.
+/// The payload is ignored here and validated by reference in `read_meta`.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct JobMeta {
+    schema_version: u32,
+    id: String,
+    #[allow(dead_code)]
+    payload: serde::de::IgnoredAny,
+    status: JobStatus,
+    attempts: u32,
+    max_attempts: u32,
+    priority: u32,
+    created_at: u64,
+    available_at: u64,
+    lease_until: Option<u64>,
+    lease_token: Option<String>,
+    worker: Option<String>,
+    last_error: Option<String>,
+}
+
+fn read_meta(key: &str, document: &Document) -> Result<JobMeta> {
+    let job: JobMeta =
+        JobMeta::deserialize(&document.value).map_err(|error| corruption(key, error))?;
     if job.schema_version != 1
         || job.id != key
         || job.id.is_empty()
@@ -193,7 +214,8 @@ fn read_job(key: &str, document: &Document) -> Result<Job> {
             "schema version or id does not match its key",
         ));
     }
-    validate_payload_numbers(&job.payload).map_err(|error| corruption(key, error))?;
+    validate_payload_numbers(document.value.get("payload").unwrap_or(&Value::Null))
+        .map_err(|error| corruption(key, error))?;
     if !(1..=1000).contains(&job.max_attempts)
         || job.attempts > job.max_attempts
         || job.priority > 1000
@@ -255,6 +277,30 @@ fn read_job(key: &str, document: &Document) -> Result<Job> {
         }
     }
     Ok(job)
+}
+
+/// Validate a stored job in place and clone it (payload included) once.
+fn read_job(key: &str, document: &Document) -> Result<Job> {
+    let meta = read_meta(key, document)?;
+    Ok(Job {
+        schema_version: meta.schema_version,
+        id: meta.id,
+        payload: document
+            .value
+            .get("payload")
+            .cloned()
+            .unwrap_or(Value::Null),
+        status: meta.status,
+        attempts: meta.attempts,
+        max_attempts: meta.max_attempts,
+        priority: meta.priority,
+        created_at: meta.created_at,
+        available_at: meta.available_at,
+        lease_until: meta.lease_until,
+        lease_token: meta.lease_token,
+        worker: meta.worker,
+        last_error: meta.last_error,
+    })
 }
 
 fn find_job(inner: &Inner, collection: &str, id: &str) -> Result<Option<Job>> {
@@ -375,7 +421,7 @@ fn owns_lease(job: &Job, token: &str, now_ms: u64) -> bool {
         && job.lease_until.is_some_and(|until| now_ms < until)
 }
 
-fn effective_availability(job: &Job, now_ms: u64) -> Option<u64> {
+fn effective_availability(job: &JobMeta, now_ms: u64) -> Option<u64> {
     match job.status {
         JobStatus::Queued if job.available_at <= now_ms => Some(job.available_at),
         JobStatus::Leased if job.attempts < job.max_attempts => {
@@ -383,6 +429,69 @@ fn effective_availability(job: &Job, now_ms: u64) -> Option<u64> {
         }
         _ => None,
     }
+}
+
+type JobMap = BTreeMap<String, Document>;
+
+/// Key of the job `queue_claim` would lease: highest priority, then earliest
+/// availability, then smallest id. Only metadata is read; nothing is cloned.
+fn select_claim(documents: &JobMap, now_ms: u64) -> Result<Option<&str>> {
+    let mut selected: Option<(u32, u64, &str)> = None;
+    for (key, document) in documents {
+        let job = read_meta(key, document)?;
+        if let Some(availability) = effective_availability(&job, now_ms) {
+            let preferred = selected.map_or(true, |(priority, current_availability, current)| {
+                job.priority > priority
+                    || (job.priority == priority
+                        && (availability, key.as_str()) < (current_availability, current))
+            });
+            if preferred {
+                selected = Some((job.priority, availability, key.as_str()));
+            }
+        }
+    }
+    Ok(selected.map(|(_, _, key)| key))
+}
+
+fn scan_stats(documents: &JobMap, now_ms: u64) -> Result<QueueStats> {
+    let mut stats = QueueStats {
+        queued: 0,
+        leased: 0,
+        done: 0,
+        dead: 0,
+        ready: 0,
+        expired: 0,
+    };
+    for (key, document) in documents {
+        let job = read_meta(key, document)?;
+        match job.status {
+            JobStatus::Queued => stats.queued += 1,
+            JobStatus::Leased => stats.leased += 1,
+            JobStatus::Done => stats.done += 1,
+            JobStatus::Dead => stats.dead += 1,
+        }
+        if effective_availability(&job, now_ms).is_some() {
+            stats.ready += 1;
+        }
+        if job.status == JobStatus::Leased && job.lease_until.is_some_and(|until| until <= now_ms) {
+            stats.expired += 1;
+        }
+    }
+    Ok(stats)
+}
+
+/// Unsorted (lease_until, id) pairs of expired leases.
+fn scan_expired(documents: &JobMap, now_ms: u64) -> Result<Vec<(u64, String)>> {
+    let mut expired = Vec::new();
+    for (key, document) in documents {
+        let job = read_meta(key, document)?;
+        if job.status == JobStatus::Leased {
+            if let Some(until) = job.lease_until.filter(|until| *until <= now_ms) {
+                expired.push((until, key.clone()));
+            }
+        }
+    }
+    Ok(expired)
 }
 
 impl Database {
@@ -464,27 +573,13 @@ impl Database {
         if inner.writer_active {
             return Err(Error::WriterBusy);
         }
-        let mut selected: Option<(Job, u64)> = None;
-        if let Some(documents) = inner.state.collections.get(&collection) {
-            for (key, document) in documents {
-                let job = read_job(key, document)?;
-                if let Some(availability) = effective_availability(&job, now_ms) {
-                    let preferred =
-                        selected
-                            .as_ref()
-                            .map_or(true, |(current, current_availability)| {
-                                job.priority > current.priority
-                                    || (job.priority == current.priority
-                                        && (availability, &job.id)
-                                            < (*current_availability, &current.id))
-                            });
-                    if preferred {
-                        selected = Some((job, availability));
-                    }
-                }
-            }
-        }
-        let Some((mut job, _)) = selected else {
+        let selected = match inner.state.collections.get(&collection) {
+            Some(documents) => select_claim(documents, now_ms)?
+                .map(|key| read_job(key, &documents[key]))
+                .transpose()?,
+            None => None,
+        };
+        let Some(mut job) = selected else {
             return Ok(None);
         };
         job.attempts += 1;
@@ -633,33 +728,10 @@ impl Database {
         let collection = queue_collection(name)?;
         safe_time(now_ms, "now_ms")?;
         let inner = self.lock()?;
-        let mut stats = QueueStats {
-            queued: 0,
-            leased: 0,
-            done: 0,
-            dead: 0,
-            ready: 0,
-            expired: 0,
+        let stats = match inner.state.collections.get(&collection) {
+            Some(documents) => scan_stats(documents, now_ms)?,
+            None => scan_stats(&JobMap::new(), now_ms)?,
         };
-        if let Some(documents) = inner.state.collections.get(&collection) {
-            for (key, document) in documents {
-                let job = read_job(key, document)?;
-                match job.status {
-                    JobStatus::Queued => stats.queued += 1,
-                    JobStatus::Leased => stats.leased += 1,
-                    JobStatus::Done => stats.done += 1,
-                    JobStatus::Dead => stats.dead += 1,
-                }
-                if effective_availability(&job, now_ms).is_some() {
-                    stats.ready += 1;
-                }
-                if job.status == JobStatus::Leased
-                    && job.lease_until.is_some_and(|until| until <= now_ms)
-                {
-                    stats.expired += 1;
-                }
-            }
-        }
         for count in [
             stats.queued,
             stats.leased,
@@ -692,17 +764,10 @@ impl Database {
         if inner.writer_active {
             return Err(Error::WriterBusy);
         }
-        let mut expired = Vec::new();
-        if let Some(documents) = inner.state.collections.get(&collection) {
-            for (key, document) in documents {
-                let job = read_job(key, document)?;
-                if job.status == JobStatus::Leased {
-                    if let Some(until) = job.lease_until.filter(|until| *until <= now_ms) {
-                        expired.push((until, key.clone()));
-                    }
-                }
-            }
-        }
+        let mut expired = match inner.state.collections.get(&collection) {
+            Some(documents) => scan_expired(documents, now_ms)?,
+            None => Vec::new(),
+        };
         expired.sort_unstable();
         let mut result = RecoveryResult {
             requeued: 0,
@@ -758,5 +823,263 @@ impl Database {
         clear_lease(&mut job);
         commit_job(&mut inner, &collection, &job, self.options)?;
         Ok(true)
+    }
+}
+
+#[cfg(test)]
+mod scan_equivalence {
+    use super::*;
+
+    // Old implementation, kept verbatim as a test oracle.
+    fn read_job_old(key: &str, document: &Document) -> Result<Job> {
+        let job: Job = serde_json::from_value(document.value.clone())
+            .map_err(|error| corruption(key, error))?;
+        if job.schema_version != 1
+            || job.id != key
+            || job.id.is_empty()
+            || job.id.len() > MAX_KEY_BYTES
+            || job.id.contains('\0')
+        {
+            return Err(corruption(
+                key,
+                "schema version or id does not match its key",
+            ));
+        }
+        validate_payload_numbers(&job.payload).map_err(|error| corruption(key, error))?;
+        if !(1..=1000).contains(&job.max_attempts)
+            || job.attempts > job.max_attempts
+            || job.priority > 1000
+        {
+            return Err(corruption(
+                key,
+                "invalid attempts, max_attempts, or priority",
+            ));
+        }
+        for value in [
+            Some(job.created_at),
+            Some(job.available_at),
+            job.lease_until,
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if value > MAX_SAFE_INTEGER {
+                return Err(corruption(key, "timestamp exceeds 2^53-1"));
+            }
+        }
+        if job.last_error.as_ref().is_some_and(|error| {
+            error.is_empty() || error.len() > MAX_ERROR_BYTES || error.contains('\0')
+        }) {
+            return Err(corruption(
+                key,
+                "last_error must contain 1..=4096 UTF-8 bytes without NUL",
+            ));
+        }
+        match job.status {
+            JobStatus::Leased => {
+                if job.attempts == 0
+                    || !job
+                        .lease_until
+                        .is_some_and(|until| until > job.available_at)
+                    || !job.lease_token.as_ref().is_some_and(|token| {
+                        !token.is_empty() && token.len() <= MAX_TOKEN_BYTES && !token.contains('\0')
+                    })
+                    || !job.worker.as_ref().is_some_and(|worker| {
+                        !worker.is_empty()
+                            && worker.len() <= MAX_WORKER_BYTES
+                            && !worker.contains('\0')
+                    })
+                {
+                    return Err(corruption(key, "leased jobs need attempts, a valid token/worker, and a lease after availability"));
+                }
+            }
+            status => {
+                if job.lease_until.is_some() || job.lease_token.is_some() || job.worker.is_some() {
+                    return Err(corruption(
+                        key,
+                        "non-leased jobs must not contain lease fields",
+                    ));
+                }
+                if (status == JobStatus::Queued && job.attempts >= job.max_attempts)
+                    || (status == JobStatus::Done && job.attempts == 0)
+                    || (status == JobStatus::Dead && job.attempts != job.max_attempts)
+                {
+                    return Err(corruption(key, "attempt count does not match job status"));
+                }
+            }
+        }
+        Ok(job)
+    }
+
+    fn effective_availability_old(job: &Job, now_ms: u64) -> Option<u64> {
+        match job.status {
+            JobStatus::Queued if job.available_at <= now_ms => Some(job.available_at),
+            JobStatus::Leased if job.attempts < job.max_attempts => {
+                job.lease_until.filter(|until| *until <= now_ms)
+            }
+            _ => None,
+        }
+    }
+
+    fn old_claim(documents: &JobMap, now_ms: u64) -> Result<Option<Job>> {
+        let mut selected: Option<(Job, u64)> = None;
+        for (key, document) in documents {
+            let job = read_job_old(key, document)?;
+            if let Some(availability) = effective_availability_old(&job, now_ms) {
+                let preferred =
+                    selected
+                        .as_ref()
+                        .map_or(true, |(current, current_availability)| {
+                            job.priority > current.priority
+                                || (job.priority == current.priority
+                                    && (availability, &job.id)
+                                        < (*current_availability, &current.id))
+                        });
+                if preferred {
+                    selected = Some((job, availability));
+                }
+            }
+        }
+        Ok(selected.map(|(job, _)| job))
+    }
+
+    fn old_stats(documents: &JobMap, now_ms: u64) -> Result<QueueStats> {
+        let mut stats = QueueStats {
+            queued: 0,
+            leased: 0,
+            done: 0,
+            dead: 0,
+            ready: 0,
+            expired: 0,
+        };
+        for (key, document) in documents {
+            let job = read_job_old(key, document)?;
+            match job.status {
+                JobStatus::Queued => stats.queued += 1,
+                JobStatus::Leased => stats.leased += 1,
+                JobStatus::Done => stats.done += 1,
+                JobStatus::Dead => stats.dead += 1,
+            }
+            if effective_availability_old(&job, now_ms).is_some() {
+                stats.ready += 1;
+            }
+            if job.status == JobStatus::Leased
+                && job.lease_until.is_some_and(|until| until <= now_ms)
+            {
+                stats.expired += 1;
+            }
+        }
+        Ok(stats)
+    }
+
+    fn old_expired(documents: &JobMap, now_ms: u64) -> Result<Vec<(u64, String)>> {
+        let mut expired = Vec::new();
+        for (key, document) in documents {
+            let job = read_job_old(key, document)?;
+            if job.status == JobStatus::Leased {
+                if let Some(until) = job.lease_until.filter(|until| *until <= now_ms) {
+                    expired.push((until, key.clone()));
+                }
+            }
+        }
+        Ok(expired)
+    }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self, bound: u64) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0 % bound
+        }
+    }
+
+    fn check(db: &Database, name: &str, now: u64) {
+        let collection = queue_collection(name).unwrap();
+        let inner = db.lock().unwrap();
+        let empty = JobMap::new();
+        let documents = inner.state.collections.get(&collection).unwrap_or(&empty);
+        let new = select_claim(documents, now)
+            .unwrap()
+            .map(|key| read_job(key, &documents[key]).unwrap());
+        assert_eq!(new, old_claim(documents, now).unwrap());
+        assert_eq!(
+            scan_stats(documents, now).unwrap(),
+            old_stats(documents, now).unwrap()
+        );
+        assert_eq!(
+            scan_expired(documents, now).unwrap(),
+            old_expired(documents, now).unwrap()
+        );
+        for (key, document) in documents {
+            assert_eq!(
+                read_job(key, document).unwrap(),
+                read_job_old(key, document).unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn seeded_workload_matches_old_scans() {
+        let dir = std::env::temp_dir().join(format!("cedrodb-scan-eq-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        let db = Database::open(&dir).unwrap();
+        for seed in [1u64, 7, 42] {
+            let name = format!("q{seed}");
+            let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+            let mut now = 1_000u64;
+            let mut leases: Vec<(String, String)> = Vec::new();
+            for step in 0..400u64 {
+                now += rng.next(50);
+                match rng.next(8) {
+                    0..=2 => {
+                        let id = format!("job-{}", rng.next(150));
+                        let payload = serde_json::json!({"n": step, "s": "x".repeat(rng.next(40) as usize), "a": [1, 2.5, null]});
+                        let options = EnqueueOptions {
+                            now_ms: now,
+                            delay_ms: rng.next(100),
+                            max_attempts: 1 + rng.next(3) as u32,
+                            priority: rng.next(4) as u32,
+                        };
+                        db.queue_enqueue(&name, &id, payload, options).unwrap();
+                    }
+                    3 | 4 => {
+                        if let Some(job) =
+                            db.queue_claim(&name, "w", now, 20 + rng.next(80)).unwrap()
+                        {
+                            leases.push((job.id, job.lease_token.unwrap()));
+                        }
+                    }
+                    5 => {
+                        if !leases.is_empty() {
+                            let (id, token) =
+                                leases.swap_remove(rng.next(leases.len() as u64) as usize);
+                            let _ = db.queue_ack(&name, &id, &token, now, &[]);
+                        }
+                    }
+                    6 => {
+                        if !leases.is_empty() {
+                            let (id, token) =
+                                leases.swap_remove(rng.next(leases.len() as u64) as usize);
+                            let _ = db.queue_fail(&name, &id, &token, now, "boom", rng.next(30));
+                        }
+                    }
+                    _ => {
+                        db.queue_recover_expired(&name, now, 1 + rng.next(5) as usize)
+                            .unwrap();
+                    }
+                }
+                if step % 5 == 0 {
+                    check(&db, &name, now);
+                    check(&db, &name, now + 500);
+                }
+            }
+            let stats = db.queue_stats(&name, now).unwrap();
+            assert!(stats.dead + stats.done + stats.queued + stats.leased > 0);
+        }
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
