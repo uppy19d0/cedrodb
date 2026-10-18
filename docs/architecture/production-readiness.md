@@ -218,6 +218,8 @@ Keep the single-process, single-file, fully in-RAM, append-only log with one coa
 
 ## 12. Items needing an RFC before implementation
 
+Drafts exist for two related items: [RFC 0001 relaxed durability](../rfcs/0001-relaxed-durability.md) and [RFC 0002 snapshot/checkpoint for faster reopen](../rfcs/0002-snapshot-checkpoint.md); see also the [RFC process](../rfcs/README.md). The compaction RFC (item 1) is still unwritten.
+
 1. **Log compaction and cursor retention:** base cursor format, `CursorCompacted` error, effect on checkpoint revisions, lease tokens, backups, deletion semantics, format version bump, consumer tracking.
 2. **History identity** (epoch/ID in log or cursor) to detect restore-and-diverge forks; prerequisite for any replication.
 3. **Persisted index definitions** (log record type, replay, verify, backup, 64-index cap).
