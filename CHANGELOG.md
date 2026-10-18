@@ -2,6 +2,11 @@
 
 All releases remain experimental. Future work is separate in [the roadmap](docs/roadmap.md).
 
+## Unreleased
+
+- Measure each document once when preparing a transaction instead of twice, and move documents into the state instead of cloning them while replaying the log or verifying a backup. Reopening a 100,000-document database is about 25% faster (median 270 ms to 192 ms in the published benchmark). Behavior, errors and the log format are unchanged.
+- Added `benchmarks/sqlite-comparison`, a standalone reproducible CedroDB vs SQLite harness with verified workloads, equivalent durability settings, per-engine processes, repeated runs and published results. It shows no write advantage, faster in-memory reads and aggregates, and slower reopening and higher memory use; see `docs/benchmarks.md`.
+
 ## 0.8.0 — 2026-10-16
 
 - Added the `cedrodb` console command to the Python package, sharing its implementation with `python -m cedrodb`.

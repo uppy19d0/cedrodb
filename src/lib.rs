@@ -567,24 +567,37 @@ impl Write for EncodedCounter {
     }
 }
 
-fn prepare_changes(
-    state: &State,
-    operations: &[Operation],
-    options: Options,
-) -> Result<(Vec<Change>, usize)> {
-    // Keep only the final update for each key within this transaction.
+/// Decide which operation wins for each key and measure every document exactly once.
+///
+/// Returns `(operation index, encoded value bytes)` for the final operation of each key, ordered by
+/// location. Every `Put` is validated, including ones superseded inside the same transaction.
+fn plan_changes(operations: &[Operation], options: Options) -> Result<Vec<(usize, usize)>> {
     let mut final_operations = BTreeMap::new();
-    for operation in operations {
+    for (index, operation) in operations.iter().enumerate() {
         let (collection, key) = operation.location();
         validate_location(collection, key)?;
-        if let Operation::Put { value, .. } = operation {
-            validate_document(value, options)?;
-        }
-        final_operations.insert((collection, key), operation);
+        let value_bytes = match operation {
+            Operation::Put { value, .. } => validate_document(value, options)?,
+            Operation::Delete { .. } => 0,
+        };
+        final_operations.insert((collection, key), (index, value_bytes));
     }
+    Ok(final_operations.into_values().collect())
+}
+
+/// Apply a plan to the current state. `take_value` supplies the document for a `Put` by operation
+/// index (a clone when the operations are still needed, a move during replay).
+fn build_changes(
+    state: &State,
+    operations: &[Operation],
+    plan: &[(usize, usize)],
+    options: Options,
+    mut take_value: impl FnMut(usize) -> Option<Value>,
+) -> Result<(Vec<Change>, usize)> {
     let mut state_bytes = state.content_bytes;
-    let mut changes = Vec::with_capacity(final_operations.len());
-    for ((collection, key), operation) in final_operations {
+    let mut changes = Vec::with_capacity(plan.len());
+    for &(index, value_bytes) in plan {
+        let (collection, key) = operations[index].location();
         if let Some(old) = state
             .collections
             .get(collection)
@@ -592,9 +605,8 @@ fn prepare_changes(
         {
             state_bytes -= old.content_bytes;
         }
-        let document = match operation {
-            Operation::Put { value, .. } => {
-                let value_bytes = validate_document(value, options)?;
+        let document = match &operations[index] {
+            Operation::Put { .. } => {
                 let content_bytes = collection
                     .len()
                     .checked_add(key.len())
@@ -604,7 +616,7 @@ fn prepare_changes(
                     .checked_add(content_bytes)
                     .ok_or_else(|| Error::LimitExceeded("state size overflow".into()))?;
                 Some(Document {
-                    value: value.clone(),
+                    value: take_value(index).expect("a put always carries a value"),
                     content_bytes,
                 })
             }
@@ -620,6 +632,45 @@ fn prepare_changes(
         return Err(Error::LimitExceeded("committed state is too large".into()));
     }
     Ok((changes, state_bytes))
+}
+
+fn prepare_changes(
+    state: &State,
+    operations: &[Operation],
+    options: Options,
+) -> Result<(Vec<Change>, usize)> {
+    let plan = plan_changes(operations, options)?;
+    build_changes(
+        state,
+        operations,
+        &plan,
+        options,
+        |index| match &operations[index] {
+            Operation::Put { value, .. } => Some(value.clone()),
+            Operation::Delete { .. } => None,
+        },
+    )
+}
+
+/// Same result as [`prepare_changes`] for operations the caller no longer needs: documents are
+/// moved into the state instead of cloned (log replay and backup verification).
+fn prepare_changes_owned(
+    state: &State,
+    mut operations: Vec<Operation>,
+    options: Options,
+) -> Result<(Vec<Change>, usize)> {
+    let plan = plan_changes(&operations, options)?;
+    // Detach the documents first; locations stay in `operations`.
+    let mut values: Vec<Option<Value>> = operations
+        .iter_mut()
+        .map(|operation| match operation {
+            Operation::Put { value, .. } => Some(std::mem::take(value)),
+            Operation::Delete { .. } => None,
+        })
+        .collect();
+    build_changes(state, &operations, &plan, options, |index| {
+        values[index].take()
+    })
 }
 
 fn apply_changes(state: &mut State, changes: Vec<Change>, state_bytes: usize) {
@@ -726,7 +777,7 @@ fn recover(file: &mut File, options: Options) -> Result<(State, Vec<u64>)> {
             Error::Corruption(format!("invalid transaction at byte {offset}: {error}"))
         })?;
         let (changes, state_bytes) =
-            prepare_changes(&state, &batch.ops, options).map_err(|error| {
+            prepare_changes_owned(&state, batch.ops, options).map_err(|error| {
                 Error::Corruption(format!("invalid transaction at byte {offset}: {error}"))
             })?;
         apply_changes(&mut state, changes, state_bytes);

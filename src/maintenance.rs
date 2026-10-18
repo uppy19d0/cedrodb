@@ -275,7 +275,7 @@ fn verify_log(reader: &mut impl Read, log_bytes: u64, options: Options) -> Resul
             Error::Corruption(format!("invalid transaction at byte {offset}: {error}"))
         })?;
         let (changes, state_bytes) =
-            prepare_changes(&state, &batch.ops, options).map_err(|error| {
+            prepare_changes_owned(&state, batch.ops, options).map_err(|error| {
                 Error::Corruption(format!("invalid transaction at byte {offset}: {error}"))
             })?;
         apply_changes(&mut state, changes, state_bytes);
