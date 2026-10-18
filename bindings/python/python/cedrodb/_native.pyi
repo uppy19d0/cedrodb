@@ -1,6 +1,7 @@
 from typing import Optional
 
-class CedroError(RuntimeError): ...
+class CedroError(RuntimeError):
+    code: str
 class DatabaseClosedError(CedroError): ...
 
 class NativeDatabase:

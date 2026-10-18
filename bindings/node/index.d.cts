@@ -8,6 +8,8 @@ declare namespace cedrodb {
   type Queue<T extends API.JsonValue = API.JsonValue> = API.Queue<T>;
   const AgentStore: typeof API.AgentStore;
   type AgentStore<T extends API.JsonValue = API.JsonValue> = API.AgentStore<T>;
+  const ErrorCode: typeof API.ErrorCode;
+  type ErrorCode = API.ErrorCode;
   const version: typeof API.version;
   type JsonValue = API.JsonValue;
   type DatabaseOptions = API.DatabaseOptions;

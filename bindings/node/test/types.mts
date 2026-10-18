@@ -57,3 +57,4 @@ agents.checkpoint('thread', { messages: [42] });
 jobs.profileQuery({ maxScanned: 10 });
 // @ts-expect-error A search profile requires search options.
 jobs.profileSearch();
+const code: 'CEDRO_CLOSED' = cedrodb.ErrorCode.CLOSED;

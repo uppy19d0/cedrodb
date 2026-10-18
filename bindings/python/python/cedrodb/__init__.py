@@ -20,8 +20,21 @@ from typing import (
 from ._native import CedroError, DatabaseClosedError, NativeDatabase
 
 __version__ = "0.9.0"
+
+# Every CedroError carries a stable ``code`` attribute (same strings as the Node binding).
+ERROR_CODES = (
+    "CEDRO_IO", "CEDRO_SERIALIZATION", "CEDRO_CORRUPTION", "CEDRO_LIMIT_EXCEEDED",
+    "CEDRO_INVALID_INPUT", "CEDRO_DATABASE_LOCKED", "CEDRO_WRITER_BUSY",
+    "CEDRO_POISONED", "CEDRO_CLOSED", "CEDRO_UNKNOWN",
+)
+
+
+def _coded(error: CedroError, code: str) -> CedroError:
+    error.code = code  # type: ignore[attr-defined]
+    return error
+
 __all__ = [
-    "Database", "Collection", "Transaction", "CedroError", "DatabaseClosedError",
+    "Database", "Collection", "Transaction", "CedroError", "DatabaseClosedError", "ERROR_CODES",
     "MISSING", "DELETE", "JSONValue", "Filter", "Record", "QueryPage",
     "ChangePage", "Stats", "IntegrityReport", "Condition", "AbsentCondition",
     "EqualsCondition", "ConditionalResult", "__version__",
@@ -430,7 +443,7 @@ class Database:
 
     def _check_open(self) -> None:
         if self.closed:
-            raise DatabaseClosedError("database is closed")
+            raise _coded(DatabaseClosedError("database is closed"), "CEDRO_CLOSED")
 
     def close(self) -> None:
         """Release the native database and its file lock. Repeated calls are safe."""
@@ -963,7 +976,7 @@ class Transaction:
     def _check_active(self) -> None:
         self._database._check_open()
         if self._finished:
-            raise CedroError("transaction has already finished")
+            raise _coded(CedroError("transaction has already finished"), "CEDRO_CLOSED")
 
     def put(self, collection: str, key: str, value: JSONValue) -> Transaction:
         self._check_active()
