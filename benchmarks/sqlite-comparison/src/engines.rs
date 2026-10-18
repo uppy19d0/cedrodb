@@ -21,7 +21,7 @@ pub trait Engine {
     fn durability(&self) -> String;
     fn open(&mut self, directory: &Path);
     fn close(&mut self);
-    fn commit_puts(&mut self, items: &[(String, Value)]);
+    fn commit_puts(&mut self, items: Vec<(String, Value)>);
     fn commit_deletes(&mut self, keys: &[String]);
     fn get(&self, key: &str) -> Option<Value>;
     fn aggregate(&self) -> AggregateResult;
@@ -74,10 +74,10 @@ impl Engine for Cedro {
     fn close(&mut self) {
         self.database = None;
     }
-    fn commit_puts(&mut self, items: &[(String, Value)]) {
+    fn commit_puts(&mut self, items: Vec<(String, Value)>) {
         let mut tx = self.db().begin_write().expect("begin");
         for (key, value) in items {
-            tx.put("docs", key, value.clone()).expect("put");
+            tx.put("docs", &key, value).expect("put");
         }
         tx.commit().expect("commit");
     }
@@ -146,12 +146,12 @@ impl Engine for Sqlite {
     fn close(&mut self) {
         self.connection = None;
     }
-    fn commit_puts(&mut self, items: &[(String, Value)]) {
+    fn commit_puts(&mut self, items: Vec<(String, Value)>) {
         let connection = self.connection.as_mut().expect("open");
         let tx = connection.transaction().expect("begin");
         {
             let mut statement = tx.prepare_cached("INSERT OR REPLACE INTO docs(key, body) VALUES (?1, ?2)").expect("prepare");
-            for (key, value) in items {
+            for (key, value) in &items {
                 statement.execute(params![key, value.to_string()]).expect("insert");
             }
         }

@@ -62,4 +62,6 @@ SQLite stores each document as JSON text in `docs(key TEXT PRIMARY KEY, body TEX
 
 ## Results
 
+Documents are generated per batch, through the same path for both engines, and are not retained or cloned by the harness; the verification model holds only a revision per key. Peak RSS therefore reflects the engine plus a small constant harness overhead. Latest run (`results/2026-10-18-apple-m2-batch2-*`, Apple M2, 100,000 documents, median of 3): peak RSS 133.1 MiB [132.1–133.4] for CedroDB vs 13.5 MiB for SQLite WAL+FULL (10,000 documents: 27.6 vs 11.6 MiB). **Correction:** the first published run (`results/superseded/`) reported 257 MiB vs ~100 MiB because the harness held the whole generated dataset and cloned each value; those RSS figures were harness artifacts and are superseded (see `results/superseded/README.md`).
+
 Result files live in [`results/`](results) as `<date>-<machine>-<records>.json` (full report) plus the `.md` summary produced by the same run.
