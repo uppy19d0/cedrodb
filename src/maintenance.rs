@@ -55,31 +55,21 @@ impl Database {
         let log_bytes = inner.file.metadata()?.len();
         inner.file.seek(SeekFrom::Start(0))?;
         let verified = verify_log(&mut inner.file, log_bytes, self.options)?;
-        let mut backup = OpenOptions::new().write(true).create_new(true).open(path)?;
-        let outcome = (|| {
-            lock_exclusive(&backup)?;
+        publish_atomically(path, |backup| {
             backup.write_all(BACKUP_MAGIC)?;
             backup.write_all(&log_bytes.to_le_bytes())?;
             backup.write_all(&verified.checksum.to_le_bytes())?;
             backup.write_all(&0u32.to_le_bytes())?;
             inner.file.seek(SeekFrom::Start(0))?;
-            let checksum = copy_checked(&mut inner.file, &mut backup, log_bytes)?;
+            let checksum = copy_checked(&mut inner.file, backup, log_bytes)?;
             if checksum != verified.checksum || inner.file.metadata()?.len() != log_bytes {
                 return Err(Error::Corruption(
                     "log changed while creating backup".into(),
                 ));
             }
-            backup.sync_all()?;
-            sync_directory(parent_directory(path))?;
-            Ok(verified.report)
-        })();
-        drop(backup);
-        if outcome.is_err() {
-            // Only this create_new call owns the backup path. Never remove a
-            // preexisting file or recursively remove anything in its directory.
-            let _ = fs::remove_file(path);
-        }
-        outcome
+            Ok(())
+        })?;
+        Ok(verified.report)
     }
 
     /// Restore a backup into a new directory using default content limits.
@@ -169,6 +159,42 @@ fn map_lock_error(error: io::Error) -> Error {
     } else {
         Error::Io(error)
     }
+}
+
+/// Write a file to a private temp name beside `path`, sync it, then publish it
+/// without replacing anything (hard link fails if `path` exists), and sync the
+/// directory. The final name never holds a partial file; the temp is removed.
+fn publish_atomically(path: &Path, write: impl FnOnce(&mut File) -> Result<()>) -> Result<()> {
+    static NEXT_TEMP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let directory = parent_directory(path);
+    let name = path
+        .file_name()
+        .ok_or_else(|| Error::Io(std::io::Error::from(std::io::ErrorKind::InvalidInput)))?;
+    let mut temp_name = std::ffi::OsString::from(".");
+    temp_name.push(name);
+    temp_name.push(format!(
+        ".{}.{}.tmp",
+        std::process::id(),
+        NEXT_TEMP.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    let temp = directory.join(temp_name);
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temp)?;
+    let outcome: Result<()> = (|| {
+        lock_exclusive(&file)?;
+        write(&mut file)?;
+        file.sync_all()?;
+        fs::hard_link(&temp, path)?;
+        Ok(())
+    })();
+    drop(file);
+    // The temp name is exclusively ours; the final name is never removed.
+    let removed = fs::remove_file(&temp);
+    outcome?;
+    removed?;
+    sync_directory(directory)
 }
 
 fn lock_exclusive(file: &File) -> Result<()> {
@@ -369,5 +395,47 @@ mod tests {
         assert!(matches!(database.verify(), Err(Error::Poisoned)));
         assert!(matches!(database.backup(&backup), Err(Error::Poisoned)));
         assert!(!backup.exists());
+    }
+
+    #[test]
+    fn failed_publication_leaves_no_final_or_temp_file() {
+        let directory = TestDirectory::new();
+        let target = directory.0.join("out.cedrobak");
+        let result = publish_atomically(&target, |file| {
+            file.write_all(b"partial")?;
+            Err(Error::Corruption("injected".into()))
+        });
+        assert!(matches!(result, Err(Error::Corruption(_))));
+        assert!(!target.exists());
+        assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 0);
+    }
+
+    #[test]
+    fn publication_refuses_existing_destination_and_keeps_it() {
+        let directory = TestDirectory::new();
+        let target = directory.0.join("out.cedrobak");
+        fs::write(&target, b"original").unwrap();
+        let result = publish_atomically(&target, |file| Ok(file.write_all(b"new")?));
+        assert!(result.is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"original");
+        assert_eq!(fs::read_dir(&directory.0).unwrap().count(), 1);
+        let database = Database::open(directory.0.join("db")).unwrap();
+        assert!(database.backup(&target).is_err());
+        assert_eq!(fs::read(&target).unwrap(), b"original");
+    }
+
+    #[test]
+    fn successful_backup_leaves_only_the_final_file() {
+        let directory = TestDirectory::new();
+        let database = Database::open(directory.0.join("db")).unwrap();
+        database.put("docs", "a", json!({"n":1})).unwrap();
+        let target = directory.0.join("ok.cedrobak");
+        database.backup(&target).unwrap();
+        let names: Vec<_> = fs::read_dir(&directory.0)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names.len(), 2, "{names:?}");
+        assert!(target.exists());
     }
 }
