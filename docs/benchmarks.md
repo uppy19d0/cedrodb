@@ -46,17 +46,17 @@ es equivalente.
 Primer resultado publicado: CedroDB 0.8.0 y SQLite 3.46.0 (compilado desde el
 código empaquetado), Apple M2, macOS, compilación `release`, 100,000 documentos
 JSON sintéticos, mediana [mínimo–máximo] de 3 ejecuciones. Los datos completos y
-el entorno están en [`results/`](../benchmarks/sqlite-comparison/results) (`2026-10-18-apple-m2-batch2-*`).
+el entorno están en [`results/`](../benchmarks/sqlite-comparison/results) (`2026-10-18-apple-m2-batch3-*`).
 
 | Métrica | CedroDB | SQLite WAL + FULL | SQLite DELETE + FULL |
 | --- | ---: | ---: | ---: |
-| Commit de 1 documento, p50 | 4.05 ms | 4.08 ms | 14.20 ms |
-| Inserción, 100 documentos por commit | 19,537 doc/s | 18,209 doc/s | 6,490 doc/s |
-| Inserción, 1,000 documentos por commit | 144,327 [138,195–145,755] doc/s | 140,767 [134,860–144,849] doc/s | 58,951 doc/s |
-| Lectura por clave existente, p50 | 0.8 µs | 3.9 µs | 7.0 µs |
-| Agregado count/sum/min/max, p50 | 6.9 ms | 97.1 ms | 97.1 ms |
-| Reapertura con el historial | 175.8 ms [167.0–186.6] | 0.4 ms | 0.1 ms |
-| RSS máximo | 133.1 MiB [132.1–133.4] | 13.5 MiB | 13.4 MiB |
+| Commit de 1 documento, p50 | 4.05 ms | 4.07 ms | 13.96 ms |
+| Inserción, 100 documentos por commit | 20,034 doc/s | 18,276 doc/s | 6,570 doc/s |
+| Inserción, 1,000 documentos por commit | 147,773 [142,018–156,463] doc/s | 138,073 [137,860–146,228] doc/s | 57,855 doc/s |
+| Lectura por clave existente, p50 | 0.8 µs | 3.7 µs | 7.2 µs |
+| Agregado count/sum/min/max, p50 | 6.9 ms | 96.9 ms | 97.2 ms |
+| Reapertura con el historial | 101.7 ms [97.6–111.9] | 0.4 ms | 0.1 ms |
+| RSS máximo | 140.9 MiB [140.1–143.5] | 13.6 MiB | 13.5 MiB |
 | Disco tras 10% de actualizaciones y 10% de borrados | 25.8 MiB | 29.0 MiB | 24.3 MiB |
 
 Con 10,000 documentos el resultado es el mismo en forma: commits y lotes
@@ -107,7 +107,7 @@ ejecuciones. No se verificó en otro hardware o sistema operativo.
 
 ### Efecto de las optimizaciones de reapertura
 
-Las ejecuciones de arriba usan el código final. Para atribuir la mejora de la
+La tabla de arriba (`batch3`) usa el código con reapertura en paralelo (ventana de 4 MiB). Una ejecución intermedia con ventana de 16 MiB dio 120.9 ms de reapertura pero 222.6 MiB de RSS máximo, por lo que se redujo la ventana; esa ejecución no se conserva. Para atribuir la mejora de la
 reapertura se comparó el código original de `main` con el final **sobre el mismo
 log** (90,000 documentos vivos tras actualizaciones y borrados), alternando 10
 ejecuciones de cada versión en procesos nuevos (`--reopen`): mediana de

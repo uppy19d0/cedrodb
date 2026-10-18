@@ -972,7 +972,7 @@ fn recover_sequential(file: &mut File, options: Options) -> Result<(State, Vec<u
 /// Frames decoded per parallel window: bounded by count and by payload bytes so reopen memory
 /// stays small. A window always holds at least one frame.
 const RECOVER_WINDOW_FRAMES: usize = 256;
-const RECOVER_WINDOW_BYTES: usize = 16 * 1024 * 1024;
+const RECOVER_WINDOW_BYTES: usize = 4 * 1024 * 1024;
 /// Below this many frames in a window, threads cost more than they save.
 const RECOVER_MIN_PARALLEL_FRAMES: usize = 4;
 const RECOVER_MAX_WORKERS: usize = 8;

@@ -48,7 +48,11 @@ if (build.error) {
 if (build.status !== 0) giveUp(`cargo build exited with status ${build.status}`, build.status ?? 1);
 const library = process.platform === 'win32' ? 'cedrodb_node.dll'
   : process.platform === 'darwin' ? 'libcedrodb_node.dylib' : 'libcedrodb_node.so';
-await mkdir(path.dirname(output), { recursive: true });
-await copyFile(path.join(targetDir, 'release', library), output);
+try {
+  await mkdir(path.dirname(output), { recursive: true });
+  await copyFile(path.join(targetDir, 'release', library), output);
+} catch (error) {
+  giveUp(`could not install the built library: ${error.message}`, 1);
+}
 require(output);
 console.log(`CedroDB native engine ready: ${platformKey()}`);
