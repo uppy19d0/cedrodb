@@ -278,7 +278,7 @@ jobs:
           if-no-files-found: error
 
   distributions:
-    needs: [test, native]
+    needs: [test, native, wheels, sdist, wheel-smoke, wheel-smoke-manylinux-pyversions, wheel-smoke-musl]
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-22.04
     steps:
@@ -295,11 +295,23 @@ jobs:
           pattern: node-*
           path: bindings/node/prebuilds
           merge-multiple: true
+      # Python files come from the published matrix (six smoke-tested wheels plus
+      # the verified sdist), not from the native job, so the site offers exactly
+      # what publish-registries.yml sends to PyPI.
       - uses: actions/download-artifact@v4
         with:
-          pattern: python-*
+          pattern: pywheel-*
           path: dist
           merge-multiple: true
+      - uses: actions/download-artifact@v4
+        with:
+          name: pysdist
+          path: dist
+      - name: Require the full Python set
+        run: |
+          ls dist
+          test "$(ls dist/*.whl | wc -l)" -eq 6
+          test "$(ls dist/*.tar.gz | wc -l)" -eq 1
       - run: npm pack ./bindings/node --pack-destination dist
       - run: python scripts/package-portfolio.py --portfolio /tmp/cedrodb-site --sdk-dir dist
       - uses: actions/upload-artifact@v4

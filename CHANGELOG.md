@@ -5,6 +5,7 @@ All releases remain experimental. Future work is separate in [the roadmap](docs/
 ## Unreleased
 
 - CI hardening (workflows only, no library change): the manylinux x86_64 wheel is now also smoke-tested on Python 3.9 and 3.13 (new `wheel-smoke-manylinux-x86_64-py3.9` / `-py3.13` artifacts, which `publish-registries.yml` now requires for PyPI; existing artifact names unchanged); smoke jobs have `timeout-minutes: 20`; the publish `validate` job exposes the validated run's `head_sha` and the npm job checks out that commit, so `check-npm-tarball.py` reads the platform list of the code that was built rather than the current `main`. Workflows were validated as YAML only and NOT executed; the first real run may need fixes.
+- CI/docs alignment (workflows and docs only, no library change): the `distributions` job now assembles its Python files from the published `pywheel-*` (six wheels) and `pysdist` artifacts, requires exactly six wheels and one sdist, and depends on the wheel, sdist and smoke jobs, so the site downloads match what PyPI receives instead of the four `manylinux_2_34` native-job wheels. `docs/releasing.md` now separates published files from the `distributions` artifact. Follow-up in the portfolio (not edited here): its wheel filename parser has no aarch64 pattern, so the manylinux aarch64 wheel stays in the raw manifest but gets no install command. Validated as YAML only and NOT executed in Actions.
 
 ## 0.9.0 — 2026-10-18
 
