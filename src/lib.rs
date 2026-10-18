@@ -793,21 +793,51 @@ fn prepare_changes(
 /// moved into the state instead of cloned (log replay and backup verification).
 fn prepare_changes_owned(
     state: &State,
-    mut operations: Vec<Operation>,
+    operations: Vec<Operation>,
     options: Options,
 ) -> Result<(Vec<Change>, usize)> {
+    let planned = plan_changes_owned(operations, options)?;
+    finish_changes_owned(state, planned, options)
+}
+
+/// State-independent half of [`prepare_changes_owned`]: validation and winner selection. Safe to
+/// run on any thread, in any order.
+struct PlannedChanges {
+    operations: Vec<Operation>,
+    values: Vec<Option<Value>>,
+    plan: Vec<(usize, usize)>,
+}
+
+fn plan_changes_owned(mut operations: Vec<Operation>, options: Options) -> Result<PlannedChanges> {
     let plan = plan_changes(&operations, options)?;
     // Detach the documents first; locations stay in `operations`.
-    let mut values: Vec<Option<Value>> = operations
+    let values: Vec<Option<Value>> = operations
         .iter_mut()
         .map(|operation| match operation {
             Operation::Put { value, .. } => Some(std::mem::take(value)),
             Operation::Delete { .. } => None,
         })
         .collect();
-    build_changes(state, &operations, &plan, options, |index| {
-        values[index].take()
+    Ok(PlannedChanges {
+        operations,
+        values,
+        plan,
     })
+}
+
+/// State-dependent half: size accounting against the current state. Must run in log order.
+fn finish_changes_owned(
+    state: &State,
+    mut planned: PlannedChanges,
+    options: Options,
+) -> Result<(Vec<Change>, usize)> {
+    build_changes(
+        state,
+        &planned.operations,
+        &planned.plan,
+        options,
+        |index| planned.values[index].take(),
+    )
 }
 
 fn apply_changes(state: &mut State, changes: Vec<Change>, state_bytes: usize) {
@@ -862,7 +892,9 @@ fn apply_changes(state: &mut State, changes: Vec<Change>, state_bytes: usize) {
     state.content_bytes = state_bytes;
 }
 
-fn recover(file: &mut File, options: Options) -> Result<(State, Vec<u64>)> {
+/// Reference implementation: strictly one frame at a time. Kept as the specification the parallel
+/// path must match (same state, same first error, same message, same truncation).
+fn recover_sequential(file: &mut File, options: Options) -> Result<(State, Vec<u64>)> {
     let file_bytes = file.metadata()?.len();
     if file_bytes < HEADER.len() as u64 {
         return Err(Error::Corruption("incomplete database header".into()));
@@ -933,6 +965,249 @@ fn recover(file: &mut File, options: Options) -> Result<(State, Vec<u64>)> {
         apply_changes(&mut state, changes, state_bytes);
         frame_offsets.push(offset);
         offset += frame_bytes;
+    }
+    Ok((state, frame_offsets))
+}
+
+/// Frames decoded per parallel window: bounded by count and by payload bytes so reopen memory
+/// stays small. A window always holds at least one frame.
+const RECOVER_WINDOW_FRAMES: usize = 256;
+const RECOVER_WINDOW_BYTES: usize = 16 * 1024 * 1024;
+/// Below this many frames in a window, threads cost more than they save.
+const RECOVER_MIN_PARALLEL_FRAMES: usize = 4;
+const RECOVER_MAX_WORKERS: usize = 8;
+
+fn recover(file: &mut File, options: Options) -> Result<(State, Vec<u64>)> {
+    let workers = std::thread::available_parallelism()
+        .map_or(1, usize::from)
+        .min(RECOVER_MAX_WORKERS);
+    if workers < 2 {
+        recover_sequential(file, options)
+    } else {
+        recover_parallel(file, options, workers)
+    }
+}
+
+struct RawFrame {
+    offset: u64,
+    checksum: u32,
+    payload: Vec<u8>,
+}
+
+/// What ended a window scan, to be acted on only after the frames before it were applied
+/// successfully (an earlier frame's error always wins, as in the sequential path).
+enum ScanEnd {
+    More,
+    Truncate(u64),
+    Fail(Error),
+}
+
+fn map_prepare_error(offset: u64, error: Error) -> Error {
+    match error {
+        Error::LimitExceeded(message) => Error::LimitExceeded(format!(
+            "transaction at byte {offset}: {message}; reopen with the limits the log \
+             was written with (limits must not shrink)"
+        )),
+        error => Error::Corruption(format!("invalid transaction at byte {offset}: {error}")),
+    }
+}
+
+/// Header checks and payload read for the next frames; mirrors the checks of
+/// `recover_sequential` in the same order, but defers checksum and decoding.
+fn scan_window(
+    file: &mut File,
+    file_bytes: u64,
+    offset: &mut u64,
+    options: Options,
+    frames: &mut Vec<RawFrame>,
+) -> ScanEnd {
+    let mut window_bytes = 0usize;
+    while *offset < file_bytes {
+        if frames.len() >= RECOVER_WINDOW_FRAMES || (window_bytes >= RECOVER_WINDOW_BYTES) {
+            return ScanEnd::More;
+        }
+        let at = *offset;
+        if file_bytes - at < FRAME_HEADER_BYTES as u64 {
+            return ScanEnd::Truncate(at);
+        }
+        let mut frame_header = [0u8; FRAME_HEADER_BYTES];
+        if let Err(error) = file.read_exact(&mut frame_header) {
+            return ScanEnd::Fail(error.into());
+        }
+        let payload_length = u32::from_le_bytes(frame_header[..4].try_into().unwrap());
+        let inverted_length = u32::from_le_bytes(frame_header[4..8].try_into().unwrap());
+        if inverted_length != !payload_length {
+            return ScanEnd::Fail(Error::Corruption(format!(
+                "frame length integrity check failed at byte {at}"
+            )));
+        }
+        let payload_bytes = payload_length as usize;
+        let checksum = u32::from_le_bytes(frame_header[8..12].try_into().unwrap());
+        if payload_bytes < EMPTY_BATCH_BYTES {
+            return ScanEnd::Fail(Error::Corruption(format!(
+                "invalid frame length {payload_bytes} at byte {at}"
+            )));
+        }
+        if payload_bytes > options.max_frame_bytes {
+            return ScanEnd::Fail(Error::LimitExceeded(format!(
+                "frame of {payload_bytes} bytes at byte {at} exceeds max_frame_bytes {}; \
+                 reopen with the limits the log was written with (limits must not shrink)",
+                options.max_frame_bytes
+            )));
+        }
+        let frame_bytes = FRAME_HEADER_BYTES as u64 + payload_bytes as u64;
+        if file_bytes - at < frame_bytes {
+            return ScanEnd::Truncate(at);
+        }
+        // Do not let one window exceed the byte budget (but always take one frame).
+        if !frames.is_empty() && window_bytes + payload_bytes > RECOVER_WINDOW_BYTES {
+            // Rewind the header just read; it is re-read in the next window.
+            if let Err(error) = file.seek(SeekFrom::Start(at)) {
+                return ScanEnd::Fail(error.into());
+            }
+            return ScanEnd::More;
+        }
+        let mut payload = vec![0; payload_bytes];
+        if let Err(error) = file.read_exact(&mut payload) {
+            return ScanEnd::Fail(error.into());
+        }
+        window_bytes += payload_bytes;
+        frames.push(RawFrame {
+            offset: at,
+            checksum,
+            payload,
+        });
+        *offset = at + frame_bytes;
+    }
+    ScanEnd::More
+}
+
+/// Checksum, parse and plan one frame; the part of recovery that does not depend on state.
+fn decode_frame(frame: RawFrame, options: Options) -> Result<PlannedChanges> {
+    let offset = frame.offset;
+    if crc32fast::hash(&frame.payload) != frame.checksum {
+        return Err(Error::Corruption(format!(
+            "checksum mismatch at byte {offset}"
+        )));
+    }
+    let batch: Batch = serde_json::from_slice(&frame.payload).map_err(|error| {
+        Error::Corruption(format!("invalid transaction at byte {offset}: {error}"))
+    })?;
+    drop(frame);
+    plan_changes_owned(batch.ops, options).map_err(|error| map_prepare_error(offset, error))
+}
+
+fn decode_frames(
+    frames: Vec<RawFrame>,
+    options: Options,
+    workers: usize,
+) -> Vec<Result<PlannedChanges>> {
+    let count = frames.len();
+    let workers = workers.min(count);
+    if count < RECOVER_MIN_PARALLEL_FRAMES || workers < 2 {
+        return frames
+            .into_iter()
+            .map(|frame| decode_frame(frame, options))
+            .collect();
+    }
+    let chunk_size = count.div_ceil(workers);
+    let mut chunks: Vec<Vec<RawFrame>> = Vec::with_capacity(workers);
+    let mut remaining = frames;
+    while remaining.len() > chunk_size {
+        let rest = remaining.split_off(chunk_size);
+        chunks.push(std::mem::replace(&mut remaining, rest));
+    }
+    chunks.push(remaining);
+    std::thread::scope(|scope| {
+        let mut chunks = chunks.into_iter();
+        let first = chunks.next().expect("at least one chunk");
+        // `None` marks a chunk run inline because its thread could not be spawned.
+        let mut handles = Vec::new();
+        for chunk in chunks {
+            // On spawn failure the chunk is lost with the closure, so keep it reachable.
+            let slot = std::sync::Arc::new(Mutex::new(Some(chunk)));
+            let worker_slot = slot.clone();
+            let spawned = std::thread::Builder::new()
+                .name("cedrodb-recover".into())
+                .spawn_scoped(scope, move || {
+                    let chunk = worker_slot.lock().ok().and_then(|mut guard| guard.take());
+                    chunk
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|frame| decode_frame(frame, options))
+                        .collect::<Vec<_>>()
+                });
+            handles.push((slot, spawned.ok()));
+        }
+        let mut results: Vec<Result<PlannedChanges>> = first
+            .into_iter()
+            .map(|frame| decode_frame(frame, options))
+            .collect();
+        for (slot, handle) in handles {
+            match handle {
+                Some(handle) => match handle.join() {
+                    Ok(part) => results.extend(part),
+                    Err(panic) => std::panic::resume_unwind(panic),
+                },
+                None => {
+                    let chunk = slot.lock().ok().and_then(|mut guard| guard.take());
+                    results.extend(
+                        chunk
+                            .unwrap_or_default()
+                            .into_iter()
+                            .map(|frame| decode_frame(frame, options)),
+                    );
+                }
+            }
+        }
+        results
+    })
+}
+
+/// Same observable result as [`recover_sequential`]: frames are scanned in bounded windows,
+/// decoded on up to `workers` threads, then applied strictly in log order. Any error (including
+/// one that ended the scan) is reported only after every earlier frame applied cleanly.
+fn recover_parallel(
+    file: &mut File,
+    options: Options,
+    workers: usize,
+) -> Result<(State, Vec<u64>)> {
+    let file_bytes = file.metadata()?.len();
+    if file_bytes < HEADER.len() as u64 {
+        return Err(Error::Corruption("incomplete database header".into()));
+    }
+    let mut header = [0; HEADER.len()];
+    file.read_exact(&mut header)?;
+    if &header != HEADER {
+        return Err(Error::Corruption(
+            "unsupported or invalid database header".into(),
+        ));
+    }
+    let mut state = State::default();
+    let mut frame_offsets = Vec::new();
+    let mut offset = HEADER.len() as u64;
+    loop {
+        let mut frames = Vec::new();
+        let end = scan_window(file, file_bytes, &mut offset, options, &mut frames);
+        let offsets: Vec<u64> = frames.iter().map(|frame| frame.offset).collect();
+        for (frame_offset, planned) in offsets
+            .into_iter()
+            .zip(decode_frames(frames, options, workers))
+        {
+            let (changes, state_bytes) = finish_changes_owned(&state, planned?, options)
+                .map_err(|error| map_prepare_error(frame_offset, error))?;
+            apply_changes(&mut state, changes, state_bytes);
+            frame_offsets.push(frame_offset);
+        }
+        match end {
+            ScanEnd::More if offset < file_bytes => {}
+            ScanEnd::More => break,
+            ScanEnd::Truncate(at) => {
+                truncate_tail(file, at)?;
+                break;
+            }
+            ScanEnd::Fail(error) => return Err(error),
+        }
     }
     Ok((state, frame_offsets))
 }
@@ -1106,5 +1381,302 @@ mod tests {
                 "{text}: expected `{expected}` in `{error}`"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod recover_equivalence {
+    use super::*;
+    use serde_json::json;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    fn frame(ops: &[Value]) -> Vec<u8> {
+        let payload = serde_json::to_vec(&json!({ "ops": ops })).unwrap();
+        let length = payload.len() as u32;
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&length.to_le_bytes());
+        bytes.extend_from_slice(&(!length).to_le_bytes());
+        bytes.extend_from_slice(&crc32fast::hash(&payload).to_le_bytes());
+        bytes.extend_from_slice(&payload);
+        bytes
+    }
+
+    fn put(collection: &str, key: &str, value: Value) -> Value {
+        json!({"kind": "put", "collection": collection, "key": key, "value": value})
+    }
+
+    fn delete(collection: &str, key: &str) -> Value {
+        json!({"kind": "delete", "collection": collection, "key": key})
+    }
+
+    /// A valid log of `frames` frames with overwrites and deletes across frames.
+    fn sample_log(frames: usize) -> (Vec<u8>, Vec<usize>) {
+        let mut bytes = HEADER.to_vec();
+        let mut starts = Vec::new();
+        for index in 0..frames {
+            starts.push(bytes.len());
+            let mut ops = vec![
+                put(
+                    "c",
+                    &format!("k{}", index % 7),
+                    json!({"n": index, "s": "x".repeat(index % 5)}),
+                ),
+                put("d", &format!("k{index}"), json!([index, {"a": null}])),
+            ];
+            if index % 3 == 0 {
+                ops.push(delete("c", &format!("k{}", (index + 2) % 7)));
+            }
+            bytes.extend(frame(&ops));
+        }
+        (bytes, starts)
+    }
+
+    /// Outcome of one recovery on a private copy: state, offsets, final file length or error text.
+    fn outcome(bytes: &[u8], options: Options, parallel: bool, workers: usize) -> String {
+        let path = std::env::temp_dir().join(format!(
+            "cedrodb-recover-{}-{}",
+            std::process::id(),
+            COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&path, bytes).unwrap();
+        let mut file = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .unwrap();
+        let result = if parallel {
+            recover_parallel(&mut file, options, workers)
+        } else {
+            recover_sequential(&mut file, options)
+        };
+        let length = file.metadata().unwrap().len();
+        drop(file);
+        fs::remove_file(&path).unwrap();
+        match result {
+            Ok((state, offsets)) => format!("ok {state:?} {offsets:?} len={length}"),
+            Err(error) => format!(
+                "err {} {error} len={length}",
+                format!("{error:?}").split('(').next().unwrap()
+            ),
+        }
+    }
+
+    fn assert_same(bytes: &[u8], options: Options) -> String {
+        let reference = outcome(bytes, options, false, 1);
+        for workers in [2, 4, 8] {
+            assert_eq!(
+                outcome(bytes, options, true, workers),
+                reference,
+                "workers={workers}"
+            );
+        }
+        reference
+    }
+
+    #[test]
+    fn valid_logs_match_across_frame_counts() {
+        for frames in [0, 1, 3, 4, 5, 17, 300, 600] {
+            let (bytes, _) = sample_log(frames);
+            assert!(assert_same(&bytes, Options::default()).starts_with("ok "));
+        }
+    }
+
+    #[test]
+    fn corrupt_middle_frame_matches_and_first_error_wins() {
+        let (bytes, starts) = sample_log(40);
+        // Bad CRC in frame 10 and a length mismatch later: the earlier frame's error must win.
+        let mut mutated = bytes.clone();
+        mutated[starts[10] + FRAME_HEADER_BYTES + 3] ^= 0x55;
+        mutated[starts[30] + 4] ^= 0x01;
+        let result = assert_same(&mutated, Options::default());
+        assert!(
+            result.contains(&format!("checksum mismatch at byte {}", starts[10])),
+            "{result}"
+        );
+        // Only the later length-complement error.
+        let mut mutated = bytes.clone();
+        mutated[starts[30] + 4] ^= 0x01;
+        let result = assert_same(&mutated, Options::default());
+        assert!(result.contains("length integrity"), "{result}");
+        // A frame with a valid CRC but invalid JSON contents, before a bad CRC.
+        let mut mutated = bytes[..starts[5]].to_vec();
+        let junk = b"{\"ops\":[{\"kind\":\"nope\"}]}";
+        let length = junk.len() as u32;
+        mutated.extend_from_slice(&length.to_le_bytes());
+        mutated.extend_from_slice(&(!length).to_le_bytes());
+        mutated.extend_from_slice(&crc32fast::hash(junk).to_le_bytes());
+        mutated.extend_from_slice(junk);
+        let mut tail = bytes[starts[6]..].to_vec();
+        tail[FRAME_HEADER_BYTES + 2] ^= 0x10;
+        mutated.extend(tail);
+        let result = assert_same(&mutated, Options::default());
+        assert!(result.contains("invalid transaction at byte"), "{result}");
+    }
+
+    #[test]
+    fn truncated_and_crash_tails_match_and_reopen_cleanly() {
+        let (bytes, starts) = sample_log(40);
+        for cut in [
+            bytes.len() - 1,
+            starts[39] + 5,
+            starts[39] + FRAME_HEADER_BYTES,
+            starts[20] + 1,
+            HEADER.len(),
+        ] {
+            let result = assert_same(&bytes[..cut], Options::default());
+            assert!(result.starts_with("ok "), "{result}");
+        }
+        // Truncated tail after a corrupt earlier frame: the corruption error wins, no truncation.
+        let mut mutated = bytes[..bytes.len() - 3].to_vec();
+        mutated[starts[2] + FRAME_HEADER_BYTES + 1] ^= 0x20;
+        let result = assert_same(&mutated, Options::default());
+        assert!(result.starts_with("err Corruption"), "{result}");
+        assert!(
+            result.ends_with(&format!("len={}", mutated.len())),
+            "{result}"
+        );
+        // Real crash tail through the public API: reopen twice, same recovered documents.
+        let path = std::env::temp_dir().join(format!("cedrodb-crash-tail-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&path);
+        {
+            let database = Database::open(&path).unwrap();
+            for index in 0..30 {
+                let mut transaction = database.begin_write().unwrap();
+                transaction
+                    .put("c", &format!("k{index}"), json!(index))
+                    .unwrap();
+                transaction.commit().unwrap();
+            }
+        }
+        let log = path.join("cedro.log");
+        let mut data = fs::read(&log).unwrap();
+        data.extend_from_slice(&[0x40, 0, 0, 0, 0xbf, 0xff]);
+        fs::write(&log, &data).unwrap();
+        let database = Database::open(&path).unwrap();
+        assert_eq!(database.scan("c").unwrap().len(), 30);
+        drop(database);
+        assert_eq!(fs::metadata(&log).unwrap().len() as usize, data.len() - 6);
+        assert_eq!(Database::open(&path).unwrap().scan("c").unwrap().len(), 30);
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn limit_errors_match() {
+        let (bytes, starts) = sample_log(40);
+        // Frame too large for the options: detected at scan time, after earlier frames applied.
+        let mut big = bytes[..starts[20]].to_vec();
+        big.extend(frame(&[put("c", "big", json!("y".repeat(5000)))]));
+        big.extend_from_slice(&bytes[starts[20]..]);
+        let options = Options {
+            max_frame_bytes: 1000,
+            ..Options::default()
+        };
+        let result = assert_same(&big, options);
+        assert!(result.starts_with("err LimitExceeded"), "{result}");
+        // Document too large (frame fits), and state too large (state-dependent, finish step).
+        let options = Options {
+            max_document_bytes: 4000,
+            ..Options::default()
+        };
+        let result = assert_same(&big, options);
+        assert!(result.starts_with("err LimitExceeded"), "{result}");
+        let options = Options {
+            max_state_bytes: 600,
+            ..Options::default()
+        };
+        let result = assert_same(&bytes, options);
+        assert!(result.contains("committed state is too large"), "{result}");
+    }
+
+    struct Rng(u64);
+    impl Rng {
+        fn next(&mut self) -> u64 {
+            self.0 ^= self.0 << 13;
+            self.0 ^= self.0 >> 7;
+            self.0 ^= self.0 << 17;
+            self.0
+        }
+        fn below(&mut self, bound: usize) -> usize {
+            (self.next() % bound as u64) as usize
+        }
+    }
+
+    #[test]
+    fn seeded_mutations_agree_with_the_sequential_reference() {
+        let (bytes, _) = sample_log(24);
+        let tight = Options {
+            max_frame_bytes: 200,
+            max_document_bytes: 64,
+            max_state_bytes: 700,
+        };
+        let mut rng = Rng(0x9e37_79b9_7f4a_7c15);
+        let (mut oks, mut errs) = (0, 0);
+        for round in 0..600 {
+            let mut mutated = bytes.clone();
+            for _ in 0..1 + rng.below(3) {
+                match rng.below(4) {
+                    0 => {
+                        let at = rng.below(mutated.len());
+                        mutated[at] ^= 1 << rng.below(8);
+                    }
+                    1 => {
+                        let keep = HEADER.len() + rng.below(mutated.len() - HEADER.len());
+                        mutated.truncate(keep);
+                    }
+                    2 => {
+                        let at = HEADER.len() + rng.below(mutated.len() - HEADER.len());
+                        mutated[at] = rng.next() as u8;
+                    }
+                    _ => {
+                        for _ in 0..rng.below(20) {
+                            mutated.push(rng.next() as u8);
+                        }
+                    }
+                }
+                if mutated.len() <= HEADER.len() {
+                    break;
+                }
+            }
+            let options = if round % 5 == 0 {
+                tight
+            } else {
+                Options::default()
+            };
+            let result = outcome(&mutated, options, false, 1);
+            if result.starts_with("ok ") {
+                oks += 1
+            } else {
+                errs += 1
+            }
+            for workers in [2, 8] {
+                assert_eq!(
+                    outcome(&mutated, options, true, workers),
+                    result,
+                    "round {round}"
+                );
+            }
+        }
+        assert!(oks > 20 && errs > 20, "ok={oks} err={errs}");
+    }
+
+    #[test]
+    fn window_byte_budget_splits_without_changing_the_result() {
+        // Frames large enough that the 16 MiB byte budget forces several windows.
+        let mut bytes = HEADER.to_vec();
+        for index in 0..10 {
+            let text = "z".repeat(900_000);
+            let ops: Vec<Value> = (0..4)
+                .map(|part| put("big", &format!("k{index}-{part}"), json!(text)))
+                .collect();
+            bytes.extend(frame(&ops));
+        }
+        let options = Options {
+            max_state_bytes: usize::MAX / 2,
+            ..Options::default()
+        };
+        let result = assert_same(&bytes, options);
+        assert!(result.starts_with("ok "), "{result}");
     }
 }
