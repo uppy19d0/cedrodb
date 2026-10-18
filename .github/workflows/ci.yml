@@ -21,6 +21,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: python scripts/check-release-metadata.py
+      - run: python scripts/test_check_vendored_core.py
       - run: cargo fmt --all -- --check
       - run: cargo clippy --locked --all-targets -- -D warnings
       - run: cargo test --locked
@@ -55,6 +56,8 @@ jobs:
         run: |
           python -c "import glob,subprocess,sys; subprocess.check_call([sys.executable,'-m','pip','install','--force-reinstall',*glob.glob('dist/*.whl')])"
           python -m unittest discover -s tests -v
+      - name: Verify vendored engine copies match src/
+        run: python scripts/check-vendored-core.py
       - name: Verify Node and Python use the same storage
         run: python scripts/check-interoperability.py
       - name: Verify optional PydanticAI conversation persistence without model calls
