@@ -3,42 +3,42 @@
     {
       "aggregate": {
         "count": 20,
-        "max_us": 465.66700000000003,
-        "mean_us": 243.40424999999996,
-        "p50_us": 230.417,
-        "p95_us": 245.833,
-        "p99_us": 465.66700000000003
+        "max_us": 453.25,
+        "mean_us": 265.65,
+        "p50_us": 255.75,
+        "p95_us": 267.292,
+        "p99_us": 453.25
       },
       "delete_10_percent": {
         "commit_latency": {
           "count": 10,
-          "max_us": 5191.584,
-          "mean_us": 4303.775,
-          "p50_us": 3968.5409999999997,
-          "p95_us": 5191.584,
-          "p99_us": 5191.584
+          "max_us": 8389.083,
+          "mean_us": 5785.8459,
+          "p50_us": 4924.25,
+          "p95_us": 8389.083,
+          "p99_us": 8389.083
         },
         "documents": 1000,
         "documents_per_commit": 100,
-        "total_ms": 43.206917
+        "total_ms": 58.083917
       },
       "disk_bytes_after_changes": 2671247,
       "disk_bytes_after_load": 2369830,
       "durability": "append-only log; every commit calls File::sync_all (fsync, F_FULLFSYNC on macOS); cannot be disabled",
       "engine": "cedrodb",
-      "first_aggregate_after_reopen_ms": 0.31908400000000003,
+      "first_aggregate_after_reopen_ms": 0.572583,
       "get_hit": {
         "count": 5000,
-        "max_us": 62.541,
-        "mean_us": 0.45352340000000924,
-        "p50_us": 0.41600000000000004,
+        "max_us": 21.125,
+        "mean_us": 0.43422560000000515,
+        "p50_us": 0.375,
         "p95_us": 0.667,
-        "p99_us": 1.417
+        "p99_us": 1.4160000000000001
       },
       "get_miss": {
         "count": 5000,
-        "max_us": 0.5,
-        "mean_us": 0.029948200000000536,
+        "max_us": 0.167,
+        "mean_us": 0.030350000000000547,
         "p50_us": 0.041,
         "p95_us": 0.041999999999999996,
         "p99_us": 0.041999999999999996
@@ -47,64 +47,64 @@
         {
           "commit_latency": {
             "count": 1000,
-            "max_us": 11696.042,
-            "mean_us": 4506.380099999998,
-            "p50_us": 4085.292,
-            "p95_us": 6441.5419999999995,
-            "p99_us": 7866.458999999999
+            "max_us": 14755.707999999999,
+            "mean_us": 4512.173548999997,
+            "p50_us": 4176.0419999999995,
+            "p95_us": 6088.4169999999995,
+            "p99_us": 7288.084
           },
           "commits": 1000,
           "documents": 1000,
           "documents_per_commit": 1,
-          "documents_per_second": 221.90143903637968,
-          "total_ms": 4506.50525
+          "documents_per_second": 221.61583819694684,
+          "total_ms": 4512.3128750000005
         },
         {
           "commit_latency": {
             "count": 100,
-            "max_us": 7886.791000000001,
-            "mean_us": 5947.555000000001,
-            "p50_us": 6001.375,
-            "p95_us": 7112.0,
-            "p99_us": 7867.542
+            "max_us": 12655.792000000001,
+            "mean_us": 5526.61373,
+            "p50_us": 5139.75,
+            "p95_us": 6693.4580000000005,
+            "p99_us": 7865.040999999999
           },
           "commits": 100,
           "documents": 10000,
           "documents_per_commit": 100,
-          "documents_per_second": 16812.99930667394,
-          "total_ms": 594.777875
+          "documents_per_second": 18093.35948412416,
+          "total_ms": 552.688958
         },
         {
           "commit_latency": {
             "count": 10,
-            "max_us": 7208.916,
-            "mean_us": 6509.5044,
-            "p50_us": 6294.709,
-            "p95_us": 7208.916,
-            "p99_us": 7208.916
+            "max_us": 8173.125,
+            "mean_us": 7003.596100000001,
+            "p50_us": 6895.959,
+            "p95_us": 8173.125,
+            "p99_us": 8173.125
           },
           "commits": 10,
           "documents": 10000,
           "documents_per_commit": 1000,
-          "documents_per_second": 153616.32019785783,
-          "total_ms": 65.09725
+          "documents_per_second": 142780.31277084086,
+          "total_ms": 70.037667
         }
       ],
       "live_documents_at_end": 9000,
-      "peak_rss_kib": 28608,
-      "reopen_ms": 24.361875,
+      "peak_rss_kib": 35616,
+      "reopen_ms": 20.988334000000002,
       "update_10_percent": {
         "commit_latency": {
           "count": 10,
-          "max_us": 6611.125,
-          "mean_us": 5055.9624,
-          "p50_us": 4984.665999999999,
-          "p95_us": 6611.125,
-          "p99_us": 6611.125
+          "max_us": 6683.708,
+          "mean_us": 5255.070900000001,
+          "p50_us": 5041.0,
+          "p95_us": 6683.708,
+          "p99_us": 6683.708
         },
         "documents": 1000,
         "documents_per_commit": 100,
-        "total_ms": 51.180625
+        "total_ms": 53.158792000000005
       },
       "verification_notes": [],
       "verified": true
@@ -112,108 +112,108 @@
     {
       "aggregate": {
         "count": 20,
-        "max_us": 10418.5,
-        "mean_us": 8216.558349999998,
-        "p50_us": 7920.415999999999,
-        "p95_us": 9582.667,
-        "p99_us": 10418.5
+        "max_us": 9656.375,
+        "mean_us": 9254.68955,
+        "p50_us": 9302.75,
+        "p95_us": 9488.125,
+        "p99_us": 9656.375
       },
       "delete_10_percent": {
         "commit_latency": {
           "count": 10,
-          "max_us": 15998.333999999999,
-          "mean_us": 7762.4998,
-          "p50_us": 4963.3330000000005,
-          "p95_us": 15998.333999999999,
-          "p99_us": 15998.333999999999
+          "max_us": 10809.083,
+          "mean_us": 6426.2667,
+          "p50_us": 5230.083,
+          "p95_us": 10809.083,
+          "p99_us": 10809.083
         },
         "documents": 1000,
         "documents_per_commit": 100,
-        "total_ms": 77.718542
+        "total_ms": 64.329583
       },
       "disk_bytes_after_changes": 6898848,
       "disk_bytes_after_load": 2570696,
       "durability": "journal_mode=WAL, synchronous=FULL, fullfsync=ON (device-cache flush on macOS)",
       "engine": "sqlite-wal-full",
-      "first_aggregate_after_reopen_ms": 8.103292,
+      "first_aggregate_after_reopen_ms": 8.090208,
       "get_hit": {
         "count": 5000,
-        "max_us": 7.667,
-        "mean_us": 3.1087121999999976,
-        "p50_us": 3.125,
-        "p95_us": 4.417,
-        "p99_us": 4.875
+        "max_us": 36.541000000000004,
+        "mean_us": 2.547068199999985,
+        "p50_us": 2.5,
+        "p95_us": 3.666,
+        "p99_us": 4.25
       },
       "get_miss": {
         "count": 5000,
-        "max_us": 3.5829999999999997,
-        "mean_us": 1.458594599999962,
-        "p50_us": 1.583,
-        "p95_us": 1.75,
-        "p99_us": 1.75
+        "max_us": 15.291999999999998,
+        "mean_us": 1.3542143999999865,
+        "p50_us": 1.25,
+        "p95_us": 1.708,
+        "p99_us": 1.792
       },
       "inserts": [
         {
           "commit_latency": {
             "count": 1000,
-            "max_us": 13260.083,
-            "mean_us": 4373.307993000001,
-            "p50_us": 4081.375,
-            "p95_us": 5697.625,
-            "p99_us": 6528.5830000000005
+            "max_us": 29446.333000000002,
+            "mean_us": 4472.311702000003,
+            "p50_us": 4118.666,
+            "p95_us": 5620.875,
+            "p99_us": 7257.2080000000005
           },
           "commits": 1000,
           "documents": 1000,
           "documents_per_commit": 1,
-          "documents_per_second": 228.6464572731938,
-          "total_ms": 4373.564375
+          "documents_per_second": 223.58369368742052,
+          "total_ms": 4472.598084
         },
         {
           "commit_latency": {
             "count": 100,
-            "max_us": 19199.958,
-            "mean_us": 5690.66249,
-            "p50_us": 5178.417,
-            "p95_us": 7298.2919999999995,
-            "p99_us": 9025.083999999999
+            "max_us": 25078.375,
+            "mean_us": 6425.361240000001,
+            "p50_us": 5961.417,
+            "p95_us": 9056.583999999999,
+            "p99_us": 17062.042
           },
           "commits": 100,
           "documents": 10000,
           "documents_per_commit": 100,
-          "documents_per_second": 17571.357281921886,
-          "total_ms": 569.108
+          "documents_per_second": 15562.44020618677,
+          "total_ms": 642.57275
         },
         {
           "commit_latency": {
             "count": 10,
-            "max_us": 9148.875,
-            "mean_us": 6509.8459,
-            "p50_us": 6027.417,
-            "p95_us": 9148.875,
-            "p99_us": 9148.875
+            "max_us": 11346.167000000001,
+            "mean_us": 7168.9791,
+            "p50_us": 6478.0419999999995,
+            "p95_us": 11346.167000000001,
+            "p99_us": 11346.167000000001
           },
           "commits": 10,
           "documents": 10000,
           "documents_per_commit": 1000,
-          "documents_per_second": 153608.25955298214,
-          "total_ms": 65.100666
+          "documents_per_second": 139485.01101743281,
+          "total_ms": 71.69229100000001
         }
       ],
       "live_documents_at_end": 9000,
-      "peak_rss_kib": 16672,
-      "reopen_ms": 0.35691599999999996,
+      "peak_rss_kib": 16944,
+      "reopen_ms": 0.34179099999999996,
       "update_10_percent": {
         "commit_latency": {
           "count": 10,
-          "max_us": 32834.542,
-          "mean_us": 9967.3253,
-          "p50_us": 5557.834,
-          "p95_us": 32834.542,
-          "p99_us": 32834.542
+          "max_us": 16607.25,
+          "mean_us": 8186.887400000001,
+          "p50_us": 5080.833,
+          "p95_us": 16607.25,
+          "p99_us": 16607.25
         },
         "documents": 1000,
         "documents_per_commit": 100,
-        "total_ms": 100.249083
+        "total_ms": 82.40887500000001
       },
       "verification_notes": [],
       "verified": true
@@ -221,108 +221,108 @@
     {
       "aggregate": {
         "count": 20,
-        "max_us": 9268.0,
-        "mean_us": 8255.793800000001,
-        "p50_us": 8120.833,
-        "p95_us": 8911.166,
-        "p99_us": 9268.0
+        "max_us": 9716.583,
+        "mean_us": 9337.41665,
+        "p50_us": 9320.5,
+        "p95_us": 9456.166000000001,
+        "p99_us": 9716.583
       },
       "delete_10_percent": {
         "commit_latency": {
           "count": 10,
-          "max_us": 22826.958000000002,
-          "mean_us": 20631.708300000002,
-          "p50_us": 19731.708000000002,
-          "p95_us": 22826.958000000002,
-          "p99_us": 22826.958000000002
+          "max_us": 21981.0,
+          "mean_us": 17771.6665,
+          "p50_us": 17983.583000000002,
+          "p95_us": 21981.0,
+          "p99_us": 21981.0
         },
         "documents": 1000,
         "documents_per_commit": 100,
-        "total_ms": 206.47375000000002
+        "total_ms": 177.81725
       },
       "disk_bytes_after_changes": 2449408,
       "disk_bytes_after_load": 2248704,
       "durability": "journal_mode=DELETE, synchronous=FULL, fullfsync=ON (device-cache flush on macOS)",
       "engine": "sqlite-delete-full",
-      "first_aggregate_after_reopen_ms": 13.709875,
+      "first_aggregate_after_reopen_ms": 10.782709,
       "get_hit": {
         "count": 5000,
-        "max_us": 89.66699999999999,
-        "mean_us": 8.150166400000009,
-        "p50_us": 7.334,
-        "p95_us": 11.208,
-        "p99_us": 23.125
+        "max_us": 28.875,
+        "mean_us": 5.880003799999992,
+        "p50_us": 5.5,
+        "p95_us": 7.583,
+        "p99_us": 9.333
       },
       "get_miss": {
         "count": 5000,
-        "max_us": 62.375,
-        "mean_us": 4.526088800000149,
-        "p50_us": 4.459,
-        "p95_us": 4.792,
-        "p99_us": 5.0409999999999995
+        "max_us": 56.75,
+        "mean_us": 4.590777999999945,
+        "p50_us": 4.125,
+        "p95_us": 5.582999999999999,
+        "p99_us": 5.709
       },
       "inserts": [
         {
           "commit_latency": {
             "count": 1000,
-            "max_us": 25222.834,
-            "mean_us": 14093.07768099999,
-            "p50_us": 13954.375,
-            "p95_us": 15942.000000000002,
-            "p99_us": 18169.458
+            "max_us": 25096.959,
+            "mean_us": 13611.997823999998,
+            "p50_us": 13132.417000000001,
+            "p95_us": 15979.208000000002,
+            "p99_us": 19304.167
           },
           "commits": 1000,
           "documents": 1000,
           "documents_per_commit": 1,
-          "documents_per_second": 70.95478940739021,
-          "total_ms": 14093.481333
+          "documents_per_second": 73.46266899612617,
+          "total_ms": 13612.355958
         },
         {
           "commit_latency": {
             "count": 100,
-            "max_us": 18966.791,
-            "mean_us": 14927.510409999995,
-            "p50_us": 14857.417,
-            "p95_us": 16145.5,
-            "p99_us": 17239.417
+            "max_us": 38883.666,
+            "mean_us": 16067.40375,
+            "p50_us": 15783.124999999998,
+            "p95_us": 18811.75,
+            "p99_us": 23092.791
           },
           "commits": 100,
           "documents": 10000,
           "documents_per_commit": 100,
-          "documents_per_second": 6698.778754219755,
-          "total_ms": 1492.809416
+          "documents_per_second": 6223.653040056131,
+          "total_ms": 1606.773375
         },
         {
           "commit_latency": {
             "count": 10,
-            "max_us": 25079.708,
-            "mean_us": 18661.3082,
-            "p50_us": 17038.917,
-            "p95_us": 25079.708,
-            "p99_us": 25079.708
+            "max_us": 24336.625,
+            "mean_us": 18266.4875,
+            "p50_us": 17605.625,
+            "p95_us": 24336.625,
+            "p99_us": 24336.625
           },
           "commits": 10,
           "documents": 10000,
           "documents_per_commit": 1000,
-          "documents_per_second": 53584.8965610553,
-          "total_ms": 186.61975
+          "documents_per_second": 54744.28808910075,
+          "total_ms": 182.667459
         }
       ],
       "live_documents_at_end": 9000,
-      "peak_rss_kib": 16672,
-      "reopen_ms": 0.28200000000000003,
+      "peak_rss_kib": 16352,
+      "reopen_ms": 0.14208400000000002,
       "update_10_percent": {
         "commit_latency": {
           "count": 10,
-          "max_us": 18056.75,
-          "mean_us": 16807.479099999997,
-          "p50_us": 16662.625,
-          "p95_us": 18056.75,
-          "p99_us": 18056.75
+          "max_us": 35269.125,
+          "mean_us": 21977.3084,
+          "p50_us": 18962.791999999998,
+          "p95_us": 35269.125,
+          "p99_us": 35269.125
         },
         "documents": 1000,
         "documents_per_commit": 100,
-        "total_ms": 168.752667
+        "total_ms": 220.333959
       },
       "verification_notes": [],
       "verified": true
@@ -330,108 +330,108 @@
     {
       "aggregate": {
         "count": 20,
-        "max_us": 8192.916,
-        "mean_us": 8013.7603,
-        "p50_us": 7984.667000000001,
-        "p95_us": 8153.2080000000005,
-        "p99_us": 8192.916
+        "max_us": 9494.667,
+        "mean_us": 9266.9437,
+        "p50_us": 9262.625,
+        "p95_us": 9401.5,
+        "p99_us": 9494.667
       },
       "delete_10_percent": {
         "commit_latency": {
           "count": 10,
-          "max_us": 18703.875,
-          "mean_us": 3267.0836,
-          "p50_us": 566.625,
-          "p95_us": 18703.875,
-          "p99_us": 18703.875
+          "max_us": 12466.625,
+          "mean_us": 3058.1375,
+          "p50_us": 626.75,
+          "p95_us": 12466.625,
+          "p99_us": 12466.625
         },
         "documents": 1000,
         "documents_per_commit": 100,
-        "total_ms": 32.734167
+        "total_ms": 30.642709
       },
       "disk_bytes_after_changes": 6898848,
       "disk_bytes_after_load": 2570696,
       "durability": "journal_mode=WAL, synchronous=NORMAL, fullfsync=ON (device-cache flush on macOS); NOT equivalent to CedroDB: a WAL commit is not synced until checkpoint",
       "engine": "sqlite-wal-normal",
-      "first_aggregate_after_reopen_ms": 7.669582999999999,
+      "first_aggregate_after_reopen_ms": 8.812833000000001,
       "get_hit": {
         "count": 5000,
-        "max_us": 15.209,
-        "mean_us": 2.2481235999999916,
-        "p50_us": 2.125,
-        "p95_us": 2.916,
-        "p99_us": 3.208
+        "max_us": 125.41700000000002,
+        "mean_us": 2.622973400000013,
+        "p50_us": 2.458,
+        "p95_us": 3.792,
+        "p99_us": 4.333
       },
       "get_miss": {
         "count": 5000,
-        "max_us": 10.542,
-        "mean_us": 1.1605332000000557,
-        "p50_us": 1.167,
-        "p95_us": 1.208,
-        "p99_us": 1.209
+        "max_us": 17.958,
+        "mean_us": 1.3927731999999982,
+        "p50_us": 1.292,
+        "p95_us": 1.75,
+        "p99_us": 1.917
       },
       "inserts": [
         {
           "commit_latency": {
             "count": 1000,
-            "max_us": 14775.333,
-            "mean_us": 58.606544000000014,
-            "p50_us": 19.875,
-            "p95_us": 30.208,
-            "p99_us": 45.125
+            "max_us": 10166.25,
+            "mean_us": 42.549323,
+            "p50_us": 15.832999999999998,
+            "p95_us": 22.791,
+            "p99_us": 35.0
           },
           "commits": 1000,
           "documents": 1000,
           "documents_per_commit": 1,
-          "documents_per_second": 17050.79493193084,
-          "total_ms": 58.648292
+          "documents_per_second": 23484.538061954463,
+          "total_ms": 42.581208000000004
         },
         {
           "commit_latency": {
             "count": 100,
-            "max_us": 14961.5,
-            "mean_us": 438.4699699999999,
-            "p50_us": 236.25,
-            "p95_us": 268.375,
-            "p99_us": 6215.958
+            "max_us": 13013.041,
+            "mean_us": 490.6158099999999,
+            "p50_us": 209.875,
+            "p95_us": 573.458,
+            "p99_us": 10400.25
           },
           "commits": 100,
           "documents": 10000,
           "documents_per_commit": 100,
-          "documents_per_second": 228035.65164106313,
-          "total_ms": 43.852792
+          "documents_per_second": 203767.83849882765,
+          "total_ms": 49.075458000000005
         },
         {
           "commit_latency": {
             "count": 10,
-            "max_us": 1791.75,
-            "mean_us": 1679.2291,
-            "p50_us": 1630.875,
-            "p95_us": 1791.75,
-            "p99_us": 1791.75
+            "max_us": 2739.1659999999997,
+            "mean_us": 1679.0248,
+            "p50_us": 1505.792,
+            "p95_us": 2739.1659999999997,
+            "p99_us": 2739.1659999999997
           },
           "commits": 10,
           "documents": 10000,
           "documents_per_commit": 1000,
-          "documents_per_second": 595477.3495303172,
-          "total_ms": 16.79325
+          "documents_per_second": 595523.1665062526,
+          "total_ms": 16.791957999999997
         }
       ],
       "live_documents_at_end": 9000,
-      "peak_rss_kib": 16048,
-      "reopen_ms": 0.323791,
+      "peak_rss_kib": 16544,
+      "reopen_ms": 0.38366700000000004,
       "update_10_percent": {
         "commit_latency": {
           "count": 10,
-          "max_us": 16262.834,
-          "mean_us": 4090.504,
-          "p50_us": 674.041,
-          "p95_us": 16262.834,
-          "p99_us": 16262.834
+          "max_us": 15476.167000000001,
+          "mean_us": 4419.3916,
+          "p50_us": 744.333,
+          "p95_us": 15476.167000000001,
+          "p99_us": 15476.167000000001
         },
         "documents": 1000,
         "documents_per_commit": 100,
-        "total_ms": 41.425875
+        "total_ms": 44.726667
       },
       "verification_notes": [],
       "verified": true

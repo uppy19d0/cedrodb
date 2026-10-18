@@ -22,6 +22,7 @@ Publish medians of several runs, never a single run: one run can be disturbed by
 | `--single-commit-limit` | 1000 | Cap for the "one document per commit" insert, which waits for the disk on every commit |
 | `--dir` | system temp | Where databases are created. **Point it at the disk you want to measure** |
 | `--engine` | all | Internal: run one engine in the current process |
+| `--reopen <dir>` | – | Open an existing CedroDB directory once and print the reopen time and peak RSS. Alternate it between two builds of the engine, in fresh processes and on the same log, to attribute a change to a code difference |
 
 Always use `--release`: a debug build is reported as `build: debug (NOT valid for comparisons)`.
 

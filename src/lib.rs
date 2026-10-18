@@ -181,8 +181,8 @@ pub struct Database {
     metrics: Arc<performance::SessionCounters>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 enum Operation {
     Put {
         collection: String,
@@ -193,6 +193,143 @@ enum Operation {
         collection: String,
         key: String,
     },
+}
+
+/// Reads one operation straight from the JSON map. An internally tagged derive would first copy the whole
+/// document into serde's intermediate buffer; replaying a large log spent most of its time doing that.
+/// Accepted shape and errors match the derived version: `kind` is `put` or `delete`, `put` needs `value`,
+/// `delete` rejects it, unknown or repeated fields are errors.
+impl<'de> Deserialize<'de> for Operation {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        deserializer.deserialize_map(OperationVisitor)
+    }
+}
+
+struct OperationVisitor;
+
+/// Field names are matched without allocating a `String` per field (four per operation otherwise).
+enum Field {
+    Kind,
+    Collection,
+    Key,
+    Value,
+    Unknown(String),
+}
+
+impl<'de> Deserialize<'de> for Field {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        struct FieldVisitor;
+        impl serde::de::Visitor<'_> for FieldVisitor {
+            type Value = Field;
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("an operation field name")
+            }
+            fn visit_str<E: serde::de::Error>(self, name: &str) -> std::result::Result<Field, E> {
+                Ok(match name {
+                    "kind" => Field::Kind,
+                    "collection" => Field::Collection,
+                    "key" => Field::Key,
+                    "value" => Field::Value,
+                    other => Field::Unknown(other.to_owned()),
+                })
+            }
+        }
+        deserializer.deserialize_identifier(FieldVisitor)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum Kind {
+    Put,
+    Delete,
+}
+
+impl<'de> Deserialize<'de> for Kind {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        struct KindVisitor;
+        impl serde::de::Visitor<'_> for KindVisitor {
+            type Value = Kind;
+            fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                formatter.write_str("`put` or `delete`")
+            }
+            fn visit_str<E: serde::de::Error>(self, name: &str) -> std::result::Result<Kind, E> {
+                match name {
+                    "put" => Ok(Kind::Put),
+                    "delete" => Ok(Kind::Delete),
+                    other => Err(E::unknown_variant(other, &["put", "delete"])),
+                }
+            }
+        }
+        deserializer.deserialize_str(KindVisitor)
+    }
+}
+
+impl<'de> serde::de::Visitor<'de> for OperationVisitor {
+    type Value = Operation;
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("a put or delete operation")
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(
+        self,
+        mut map: A,
+    ) -> std::result::Result<Operation, A::Error> {
+        use serde::de::Error as _;
+        let (mut kind, mut collection, mut key): (Option<Kind>, Option<String>, Option<String>) =
+            (None, None, None);
+        let mut value: Option<Value> = None;
+        while let Some(field) = map.next_key::<Field>()? {
+            match field {
+                Field::Kind => set_once(&mut kind, map.next_value()?, "kind")?,
+                Field::Collection => set_once(&mut collection, map.next_value()?, "collection")?,
+                Field::Key => set_once(&mut key, map.next_value()?, "key")?,
+                Field::Value => set_once(&mut value, map.next_value()?, "value")?,
+                Field::Unknown(other) => {
+                    return Err(A::Error::unknown_field(
+                        &other,
+                        &["kind", "collection", "key", "value"],
+                    ))
+                }
+            }
+        }
+        let collection = collection.ok_or_else(|| A::Error::missing_field("collection"))?;
+        let key = key.ok_or_else(|| A::Error::missing_field("key"))?;
+        match kind {
+            Some(Kind::Put) => Ok(Operation::Put {
+                collection,
+                key,
+                value: value.ok_or_else(|| A::Error::missing_field("value"))?,
+            }),
+            Some(Kind::Delete) => {
+                if value.is_some() {
+                    return Err(A::Error::unknown_field(
+                        "value",
+                        &["kind", "collection", "key"],
+                    ));
+                }
+                Ok(Operation::Delete { collection, key })
+            }
+            None => Err(A::Error::missing_field("kind")),
+        }
+    }
+}
+
+fn set_once<T, E: serde::de::Error>(
+    slot: &mut Option<T>,
+    value: T,
+    name: &'static str,
+) -> std::result::Result<(), E> {
+    if slot.replace(value).is_some() {
+        return Err(E::duplicate_field(name));
+    }
+    Ok(())
 }
 
 impl Operation {
@@ -856,5 +993,105 @@ mod tests {
             validate_document(&value, Options::default()),
             Err(Error::LimitExceeded(_))
         ));
+    }
+
+    fn parse(text: &str) -> std::result::Result<Operation, serde_json::Error> {
+        serde_json::from_str(text)
+    }
+
+    #[test]
+    fn operations_round_trip_through_their_log_encoding() {
+        let put = Operation::Put {
+            collection: "orders".into(),
+            key: "1".into(),
+            value: json!({"total": 12.5, "items": [1, 2, {"deep": null}]}),
+        };
+        let encoded = serde_json::to_string(&put).unwrap();
+        assert!(encoded.starts_with(r#"{"kind":"put","collection":"orders","key":"1","value":"#));
+        match parse(&encoded).unwrap() {
+            Operation::Put {
+                collection,
+                key,
+                value,
+            } => {
+                assert_eq!((collection.as_str(), key.as_str()), ("orders", "1"));
+                assert_eq!(
+                    value,
+                    json!({"total": 12.5, "items": [1, 2, {"deep": null}]})
+                );
+            }
+            other => panic!("expected a put, got {other:?}"),
+        }
+        let delete = serde_json::to_string(&Operation::Delete {
+            collection: "c".into(),
+            key: "k".into(),
+        })
+        .unwrap();
+        assert!(matches!(parse(&delete).unwrap(), Operation::Delete { .. }));
+    }
+
+    #[test]
+    fn operation_fields_may_appear_in_any_order_and_nulls_are_values() {
+        let operation = parse(r#"{"value":null,"key":"k","collection":"c","kind":"put"}"#).unwrap();
+        assert!(matches!(
+            operation,
+            Operation::Put {
+                value: Value::Null,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn malformed_operations_are_rejected() {
+        for (text, expected) in [
+            (
+                r#"{"collection":"c","key":"k","value":1}"#,
+                "missing field `kind`",
+            ),
+            (
+                r#"{"kind":"put","key":"k","value":1}"#,
+                "missing field `collection`",
+            ),
+            (
+                r#"{"kind":"put","collection":"c","value":1}"#,
+                "missing field `key`",
+            ),
+            (
+                r#"{"kind":"put","collection":"c","key":"k"}"#,
+                "missing field `value`",
+            ),
+            (
+                r#"{"kind":"update","collection":"c","key":"k"}"#,
+                "unknown variant `update`",
+            ),
+            (
+                r#"{"kind":"delete","collection":"c","key":"k","value":1}"#,
+                "unknown field `value`",
+            ),
+            (
+                r#"{"kind":"put","collection":"c","key":"k","value":1,"extra":true}"#,
+                "unknown field `extra`",
+            ),
+            (
+                r#"{"kind":"put","kind":"delete","collection":"c","key":"k"}"#,
+                "duplicate field `kind`",
+            ),
+            (
+                r#"{"kind":"put","collection":"c","key":"k","value":1,"value":2}"#,
+                "duplicate field `value`",
+            ),
+            (
+                r#"{"kind":"put","collection":7,"key":"k","value":1}"#,
+                "invalid type",
+            ),
+            (r#"["put","c","k"]"#, "invalid type"),
+        ] {
+            let error = parse(text).expect_err(text).to_string();
+            assert!(
+                error.contains(expected),
+                "{text}: expected `{expected}` in `{error}`"
+            );
+        }
     }
 }

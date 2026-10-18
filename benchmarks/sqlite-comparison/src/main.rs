@@ -35,6 +35,16 @@ fn main() {
         directory: arg(&args, "--dir").map_or_else(|| std::env::temp_dir().join("cedrodb-sqlite-comparison"), Into::into),
     };
 
+    if let Some(directory) = arg(&args, "--reopen") {
+        // A/B helper: open an existing CedroDB directory once in a fresh process and report time and peak RSS.
+        let started = std::time::Instant::now();
+        let database = cedrodb::Database::open(&directory).expect("open existing database");
+        let reopen_ms = started.elapsed().as_secs_f64() * 1e3;
+        let documents = database.aggregate("docs", "score").map_or(0, |a| a.count);
+        println!("{}", json!({ "reopen_ms": reopen_ms, "documents": documents, "peak_rss_kib": workload::peak_rss_kib() }));
+        return;
+    }
+
     if let Some(engine) = arg(&args, "--engine") {
         // Child mode: run one engine and print its result as JSON.
         let result = workload::run(&engine, &config);

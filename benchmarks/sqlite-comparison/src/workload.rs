@@ -59,7 +59,7 @@ fn stats(mut samples: Vec<Duration>) -> Value {
     json!({ "count": samples.len(), "p50_us": at(0.50), "p95_us": at(0.95), "p99_us": at(0.99), "max_us": micros(*samples.last().unwrap()), "mean_us": mean })
 }
 
-fn peak_rss_kib() -> u64 {
+pub fn peak_rss_kib() -> u64 {
     // ru_maxrss is bytes on macOS and KiB on Linux.
     let mut usage: libc::rusage = unsafe { std::mem::zeroed() };
     unsafe { libc::getrusage(libc::RUSAGE_SELF, &mut usage) };
