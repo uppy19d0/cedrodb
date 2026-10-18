@@ -6,15 +6,15 @@
 
 CedroDB is a Rust engine with native Node.js/TypeScript and Python libraries. Save an agent checkpoint and its document/outbox writes in one transaction, reject stale checkpoint revisions, and retrieve local memory using text, supplied embeddings or both. Documents, jobs, backups and a durable changefeed share one storage format.
 
-**0.8.0 is experimental.** We are approaching 1.0 through incremental, tested releases. The engine is not production validated; there are no superiority claims against SQLite, MDBX, UnQLite or DuckDB.
+**0.9.0 is experimental.** We are approaching 1.0 through incremental, tested releases. The engine is not production validated; there are no superiority claims against SQLite, MDBX, UnQLite or DuckDB.
 
 [CLI commands](docs/cli.md) · [Performance tools](docs/performance.md) · [Installation guide](docs/installation.md) · [Agents and retrieval](docs/agents.md) · [Research](docs/ai-research.md) · [Node API](bindings/node/README.md) · [Python API](bindings/python/README.md) · [Backups](docs/backups.md) · [Recipes](docs/use-cases.md) · [Local jobs](docs/jobs.md) · [Changelog](CHANGELOG.md) · [Road to 1.0](docs/roadmap.md) · [Live examples](https://www.ltavarez.me/labs/cedrodb)
 
 ## Quick start
 
 ```sh
-npm install cedrodb@0.8.0        # Node.js 18+
-python -m pip install cedrodb==0.8.0   # Python 3.9+
+npm install cedrodb@0.9.0        # Node.js 18+
+python -m pip install cedrodb==0.9.0   # Python 3.9+
 ```
 
 ```python
@@ -55,16 +55,16 @@ One open handle owns a database directory. Operations within it serialize throug
 
 ## Install
 
-Install Node.js from [npm](https://www.npmjs.com/package/cedrodb/v/0.8.0):
+Install Node.js from [npm](https://www.npmjs.com/package/cedrodb/v/0.9.0):
 
 ```sh
-npm install cedrodb@0.8.0
+npm install cedrodb@0.9.0
 ```
 
-Install Python from [PyPI](https://pypi.org/project/cedrodb/0.8.0/). Pip selects a compatible wheel when available; direct release downloads remain available from [the platform selector](https://www.ltavarez.me/labs/cedrodb).
+Install Python from [PyPI](https://pypi.org/project/cedrodb/0.9.0/). Pip selects a compatible wheel when available; direct release downloads remain available from [the platform selector](https://www.ltavarez.me/labs/cedrodb).
 
 ```sh
-python -m pip install cedrodb==0.8.0
+python -m pip install cedrodb==0.9.0
 ```
 
 Python supports 3.9+; its source distribution needs Rust 1.85+ and a platform linker. Node supports 18+, includes binaries for macOS ARM64/x64, Linux x64 with compatible glibc and Windows x64, and needs Rust 1.88+ for its source fallback. [Distribution details](docs/native-libraries.md).
